@@ -272,12 +272,16 @@ vocallocked: dict[int, int] = {}  # user_id -> channel_id
 
 @bot.command()
 @is_allowed()
-async def lock(ctx, member: discord.Member):
-    if not member.voice:
-        await ctx.send("⚠️ Cette personne n'est pas en vocal.")
+async def lock(ctx, member: discord.Member, channel_id: int):
+    channel = ctx.guild.get_channel(channel_id)
+    if not channel or not isinstance(channel, discord.VoiceChannel):
+        await ctx.send("⚠️ ID de salon vocal invalide.")
         return
-    channel = member.voice.channel
     vocallocked[member.id] = channel.id
+    try:
+        await member.move_to(channel)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
     await ctx.send(f"🔒 **{member.display_name}** est attaché à **{channel.name}** !")
 
 
@@ -293,7 +297,6 @@ async def unlock(ctx, member: discord.Member):
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    # Vérif laisse vocale
     if member.id in vocallocked:
         locked_channel = member.guild.get_channel(vocallocked[member.id])
         if locked_channel and after.channel != locked_channel:
@@ -301,6 +304,7 @@ async def on_voice_state_update(member, before, after):
                 await member.move_to(locked_channel)
             except (discord.Forbidden, discord.HTTPException):
                 pass
+
 
 
 # ─── LANCEMENT ────────────────────────────────────────────────────────────────
