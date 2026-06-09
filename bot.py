@@ -221,6 +221,51 @@ async def help_cmd(ctx):
 """, inline=False)
     await ctx.send(embed=embed)
 
+RANDOM_NAMES = [
+    "Bouffon Officiel", "Esclave de Service", "Chien Errant", "Sans Cervelle",
+    "Larbin Numéro 1", "Déchet Ambulant", "Singe Savant", "Rat de Service",
+    "Poulet Mouillé", "Cochon d'Inde", "Gros Nul 3000", "Monsieur Personne",
+    "Bébé Pleurnichard", "Champion du Vide", "Fantôme Inutile", "Clown Principal",
+    "Bouffon de Service", "Pitre Certifié", "Zéro Absolu", "Minus Habens",
+    "Cerveau de Moineau", "Roi des Loosers", "Sous-Sol Intellectuel",
+    "Tête de Chou", "Prince des Nuls", "Seigneur du Vide", "Capitaine Raté",
+    "Maître Gilles", "Idiot du Village", "Branquignol Premium",
+    "Nullité Ambulante", "Génie Inversé", "Prodige du Néant",
+    "Expert en Rien", "Professionnel du Vide"
+]
+
+randomnaming: set[int] = set()
+
+@bot.command()
+@is_allowed()
+async def randomname(ctx, member: discord.Member):
+    if member.id in randomnaming:
+        await ctx.send("⚠️ Déjà en cours pour cette personne.")
+        return
+    randomnaming.add(member.id)
+    await ctx.send(f"🎭 **{member.display_name}** va changer de pseudo toutes les 3s !")
+
+    async def loop_rename():
+        while member.id in randomnaming:
+            name = random.choice(RANDOM_NAMES)
+            try:
+                await member.edit(nick=name)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            await asyncio.sleep(3)
+
+    bot.loop.create_task(loop_rename())
+
+
+@bot.command()
+@is_allowed()
+async def stoprandom(ctx, member: discord.Member):
+    if member.id in randomnaming:
+        randomnaming.discard(member.id)
+        await ctx.send(f"✅ Pseudo aléatoire de **{member.display_name}** arrêté.")
+    else:
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en mode aléatoire.")
+
 
 # ─── LANCEMENT ────────────────────────────────────────────────────────────────
 keep_alive()
