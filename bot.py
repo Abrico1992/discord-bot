@@ -257,6 +257,7 @@ async def randomname(ctx, member: discord.Member):
     bot.loop.create_task(loop_rename())
 
 
+
 @bot.command()
 @is_allowed()
 async def stoprandom(ctx, member: discord.Member):
@@ -265,6 +266,41 @@ async def stoprandom(ctx, member: discord.Member):
         await ctx.send(f"✅ Pseudo aléatoire de **{member.display_name}** arrêté.")
     else:
         await ctx.send(f"⚠️ **{member.display_name}** n'est pas en mode aléatoire.")
+
+vocallocked: dict[int, int] = {}  # user_id -> channel_id
+
+
+@bot.command()
+@is_allowed()
+async def lock(ctx, member: discord.Member):
+    if not member.voice:
+        await ctx.send("⚠️ Cette personne n'est pas en vocal.")
+        return
+    channel = member.voice.channel
+    vocallocked[member.id] = channel.id
+    await ctx.send(f"🔒 **{member.display_name}** est attaché à **{channel.name}** !")
+
+
+@bot.command()
+@is_allowed()
+async def unlock(ctx, member: discord.Member):
+    if member.id in vocallocked:
+        del vocallocked[member.id]
+        await ctx.send(f"🔓 **{member.display_name}** n'est plus attaché à un vocal.")
+    else:
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas attaché.")
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    # Vérif laisse vocale
+    if member.id in vocallocked:
+        locked_channel = member.guild.get_channel(vocallocked[member.id])
+        if locked_channel and after.channel != locked_channel:
+            try:
+                await member.move_to(locked_channel)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
 
 # ─── LANCEMENT ────────────────────────────────────────────────────────────────
