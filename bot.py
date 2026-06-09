@@ -140,7 +140,7 @@ async def rename(ctx, member: discord.Member, *, new_name: str):
 
 @bot.command()
 @is_allowed()
-async def leash(ctx, member: discord.Member):
+async def dog(ctx, member: discord.Member):
     base = member.display_name
     if member.id in leashed:
         base = leashed[member.id].split(" (🦮")[0]
@@ -155,12 +155,12 @@ async def leash(ctx, member: discord.Member):
 
 @bot.command()
 @is_allowed()
-async def unleash(ctx, member: discord.Member):
+async def undog(ctx, member: discord.Member):
     if member.id in leashed:
         del leashed[member.id]
-        await ctx.send(f"✅ **{member.display_name}** n'est plus en laisse.")
+        await ctx.send(f"✅ **{member.display_name}** n'est plus dog.")
     else:
-        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en laisse.")
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas dog.")
 
 
 @bot.command()
@@ -240,12 +240,12 @@ RANDOM_NAMES = [
 
 @bot.command()
 @is_allowed()
-async def randomname(ctx, member: discord.Member):
+async def name(ctx, member: discord.Member):
     if member.id in randomnaming:
         await ctx.send("⚠️ Déjà en cours pour cette personne.")
         return
     randomnaming.add(member.id)
-    await ctx.send(f"🎭 **{member.display_name}** va changer de pseudo toutes les 3s ! (`!stoprandom @user` pour arrêter)")
+    await ctx.send(f"🎭 **{member.display_name}** va changer de pseudo toutes les 3s ! (`!unname @user` pour arrêter)")
 
     async def loop_rename():
         while member.id in randomnaming:
@@ -261,23 +261,23 @@ async def randomname(ctx, member: discord.Member):
 
 @bot.command()
 @is_allowed()
-async def stoprandom(ctx, member: discord.Member):
+async def unname(ctx, member: discord.Member):
     if member.id in randomnaming:
         randomnaming.discard(member.id)
-        await ctx.send(f"✅ Pseudo aléatoire de **{member.display_name}** arrêté.")
+        await ctx.send(f"✅ Name de **{member.display_name}** arrêté.")
     else:
-        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en mode aléatoire.")
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en name.")
 
 
 # ─── MUTETOGGLE ───────────────────────────────────────────────────────────────
 @bot.command()
 @is_allowed()
-async def mutetoggle(ctx, member: discord.Member):
+async def mutespam(ctx, member: discord.Member):
     if member.id in mutetoggling:
         await ctx.send("⚠️ Déjà en cours.")
         return
     mutetoggling.add(member.id)
-    await ctx.send(f"🔇🔊 **{member.display_name}** va être mute/unmute en boucle ! (`!stopmutetoggle @user` pour arrêter)")
+    await ctx.send(f"🔇🔊 **{member.display_name}** va être mute/unmute en boucle ! (`!unmutespam @user` pour arrêter)")
 
     async def loop_mutetoggle():
         muted = False
@@ -298,12 +298,12 @@ async def mutetoggle(ctx, member: discord.Member):
 
 @bot.command()
 @is_allowed()
-async def stopmutetoggle(ctx, member: discord.Member):
+async def unmutespam(ctx, member: discord.Member):
     if member.id in mutetoggling:
         mutetoggling.discard(member.id)
-        await ctx.send(f"✅ Mutetoggle de **{member.display_name}** arrêté.")
+        await ctx.send(f"✅ Mutespam de **{member.display_name}** arrêté.")
     else:
-        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en mutetoggle.")
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en mutespam.")
 
 
 # ─── SPAM MP ──────────────────────────────────────────────────────────────────
@@ -424,10 +424,10 @@ async def help_cmd(ctx):
 
     embed.add_field(name="✏️ Pseudo / Laisse", value="""
 `!rename @user [pseudo]` — Changer le pseudo
-`!leash @user` — Mettre en laisse (pseudo forcé + 🦮)
-`!unleash @user` — Retirer la laisse
-`!randomname @user` — Pseudo aléatoire toutes les 3s
-`!stoprandom @user` — Arrêter le pseudo aléatoire
+`!dog @user` — Mettre en laisse (pseudo forcé + 🦮)
+`!undog @user` — Retirer la laisse
+`!name @user` — Pseudo aléatoire toutes les 3s
+`!unname @user` — Arrêter le pseudo aléatoire
 """, inline=False)
 
     embed.add_field(name="🌀 Vocal", value="""
@@ -435,8 +435,8 @@ async def help_cmd(ctx):
 `!stopmove @user` — Arrêter les déplacements
 `!lock @user [channel_id]` — Bloquer dans un salon vocal
 `!unlock @user` — Débloquer du salon vocal
-`!mutetoggle @user` — Mute/unmute en boucle
-`!stopmutetoggle @user` — Arrêter le mutetoggle
+`!mutespam @user` — Mute/unmute en boucle
+`!unmutespam @user` — Arrêter le mutespam
 """, inline=False)
 
     embed.add_field(name="📩 Spam MP", value="""
