@@ -304,6 +304,116 @@ async def on_voice_state_update(member, before, after):
                 await member.move_to(locked_channel)
             except (discord.Forbidden, discord.HTTPException):
                 pass
+                mutetoggling: set[int] = set()  # user_ids en cours de mutetoggle
+spamming: set[int] = set()       # user_ids en cours de spam MP
+blacklist: set[int] = set()      # user_ids blacklistés
+
+
+# ─── MUTETOGGLE ───────────────────────────────────────────────────────────────
+@bot.command()
+@is_allowed()
+async def mutetoggle(ctx, member: discord.Member):
+    if member.id in mutetoggling:
+        await ctx.send("⚠️ Déjà en cours.")
+        return
+    mutetoggling.add(member.id)
+    await ctx.send(f"🔇🔊 **{member.display_name}** va être mute/demute en boucle ! (`!stopmutetoggle @user` pour arrêter)")
+
+    async def loop_mutetoggle():
+        muted = False
+        while member.id in mutetoggling:
+            try:
+                muted = not muted
+                await member.edit(mute=muted)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            await asyncio.sleep(1)
+        try:
+            await member.edit(mute=False)
+        except:
+            pass
+
+    bot.loop.create_task(loop_mutetoggle())
+
+
+@bot.command()
+@is_allowed()
+async def stopmutetoggle(ctx, member: discord.Member):
+    if member.id in mutetoggling:
+        mutetoggling.discard(member.id)
+        await ctx.send(f"✅ Mutetoggle de **{member.display_name}** arrêté.")
+    else:
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en mutetoggle.")
+
+
+# ─── SPAM MP ──────────────────────────────────────────────────────────────────
+@bot.command()
+@is_allowed()
+async def spam(ctx, member: discord.Member, *, message: str):
+    if member.id in spamming:
+        await ctx.send("⚠️ Déjà en cours.")
+        return
+    spamming.add(member.id)
+    await ctx.send(f"📩 Spam MP lancé sur **{member.display_name}** ! (`!stopspam @user` pour arrêter)")
+
+    async def loop_spam():
+        while member.id in spamming:
+            try:
+                await member.send(message)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            await asyncio.sleep(1)
+
+    bot.loop.create_task(loop_spam())
+
+
+@bot.command()
+@is_allowed()
+async def stopspam(ctx, member: discord.Member):
+    if member.id in spamming:
+        spamming.discard(member.id)
+        await ctx.send(f"✅ Spam MP de **{member.display_name}** arrêté.")
+    else:
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en spam.")
+
+
+# ─── BLACKLIST ────────────────────────────────────────────────────────────────
+@bot.command()
+@is_allowed()
+async def bl(ctx, member: discord.Member, *, reason="Blacklisté"):
+    blacklist.add(member.id)
+    try:
+        await member.ban(reason=reason)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    await ctx.send(f"⛔ **{member}** a été blacklisté et banni définitivement.")
+
+
+@bot.command()
+@is_allowed()
+async def unbl(ctx, user_id: int):
+    if user_id in blacklist:
+        blacklist.discard(user_id)
+        try:
+            await ctx.guild.unban(discord.Object(id=user_id))
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        await ctx.send(f"✅ **{user_id}** retiré de la blacklist et débanni.")
+    else:
+        await ctx.send(f"⚠️ Cet utilisateur n'est pas blacklisté.")
+
+
+# ─── REBAN AUTO SI BLACKLIST ──────────────────────────────────────────────────
+@bot.event
+async def on_member_join(member):
+    if member.id in blacklist:
+        try:
+            await member.ban(reason="Blacklisté automatiquement")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
+
 
 
 
