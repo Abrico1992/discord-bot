@@ -29,9 +29,15 @@ TOKEN = os.environ.get("DISCORD_TOKEN")
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
+# ─── VARIABLES GLOBALES ───────────────────────────────────────────────────────
 whitelist: set[int] = {OWNER_ID}
 leashed: dict[int, str] = {}
 moving: set[int] = set()
+randomnaming: set[int] = set()
+vocallocked: dict[int, int] = {}
+mutetoggling: set[int] = set()
+spamming: set[int] = set()
+blacklist: set[int] = set()
 
 
 # ─── CHECK PERMISSION ─────────────────────────────────────────────────────────
@@ -70,6 +76,26 @@ async def on_member_update(before, after):
         try:
             await after.edit(nick=leashed[after.id])
         except discord.Forbidden:
+            pass
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if member.id in vocallocked:
+        locked_channel = member.guild.get_channel(vocallocked[member.id])
+        if locked_channel and after.channel != locked_channel:
+            try:
+                await member.move_to(locked_channel)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+
+@bot.event
+async def on_member_join(member):
+    if member.id in blacklist:
+        try:
+            await member.ban(reason="Blacklisté automatiquement")
+        except (discord.Forbidden, discord.HTTPException):
             pass
 
 
@@ -175,103 +201,6 @@ async def stopmove(ctx, member: discord.Member):
 
 @bot.command()
 @is_allowed()
-async def wl(ctx, member: discord.Member):
-    if ctx.author.id != OWNER_ID:
-        await ctx.send("❌ Seul le propriétaire peut modifier la whitelist.")
-        return
-    whitelist.add(member.id)
-    await ctx.send(f"✅ **{member}** ajouté à la whitelist.")
-
-
-@bot.command()
-@is_allowed()
-async def unwl(ctx, member: discord.Member):
-    if ctx.author.id != OWNER_ID:
-        await ctx.send("❌ Seul le propriétaire peut modifier la whitelist.")
-        return
-    if member.id == OWNER_ID:
-        await ctx.send("❌ Impossible de retirer le propriétaire.")
-        return
-    whitelist.discard(member.id)
-    await ctx.send(f"✅ **{member}** retiré de la whitelist.")
-
-
-@bot.command(name="help")
-@is_allowed()
-async def help_cmd(ctx):
-    embed = discord.Embed(title="📋 Commandes du bot", color=0x2b2d31)
-    embed.add_field(name="🔨 Modération", value="""
-`!ban @user [raison]` — Bannir un membre
-`!mute @user` — Mute vocal
-`!unmute @user` — Unmute vocal
-`!timeout @user [minutes]` — Timeout (défaut: 5 min)
-""", inline=False)
-    embed.add_field(name="✏️ Pseudo / Laisse", value="""
-`!rename @user [pseudo]` — Changer le pseudo
-`!leash @user` — Mettre en laisse (pseudo forcé + 🦮)
-`!unleash @user` — Retirer la laisse
-""", inline=False)
-    embed.add_field(name="🌀 Vocal", value="""
-`!move @user` — Déplacer en boucle dans des vocaux aléatoires
-`!stopmove @user` — Arrêter les déplacements
-""", inline=False)
-    embed.add_field(name="⚙️ Whitelist (owner seulement)", value="""
-`!wl @user` — Autoriser un utilisateur
-`!unwl @user` — Retirer l'autorisation
-""", inline=False)
-    await ctx.send(embed=embed)
-
-RANDOM_NAMES = [
-    "Bouffon Officiel", "Esclave de Service", "Chien Errant", "Sans Cervelle",
-    "Larbin Numéro 1", "Déchet Ambulant", "Singe Savant", "Rat de Service",
-    "Poulet Mouillé", "Cochon d'Inde", "Gros Nul 3000", "Monsieur Personne",
-    "Bébé Pleurnichard", "Champion du Vide", "Fantôme Inutile", "Clown Principal",
-    "Bouffon de Service", "Pitre Certifié", "Zéro Absolu", "Minus Habens",
-    "Cerveau de Moineau", "Roi des Loosers", "Sous-Sol Intellectuel",
-    "Tête de Chou", "Prince des Nuls", "Seigneur du Vide", "Capitaine Raté",
-    "Maître Gilles", "Idiot du Village", "Branquignol Premium",
-    "Nullité Ambulante", "Génie Inversé", "Prodige du Néant",
-    "Expert en Rien", "Professionnel du Vide"
-]
-
-randomnaming: set[int] = set()
-
-@bot.command()
-@is_allowed()
-async def randomname(ctx, member: discord.Member):
-    if member.id in randomnaming:
-        await ctx.send("⚠️ Déjà en cours pour cette personne.")
-        return
-    randomnaming.add(member.id)
-    await ctx.send(f"🎭 **{member.display_name}** va changer de pseudo toutes les 3s !")
-
-    async def loop_rename():
-        while member.id in randomnaming:
-            name = random.choice(RANDOM_NAMES)
-            try:
-                await member.edit(nick=name)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-            await asyncio.sleep(3)
-
-    bot.loop.create_task(loop_rename())
-
-
-
-@bot.command()
-@is_allowed()
-async def stoprandom(ctx, member: discord.Member):
-    if member.id in randomnaming:
-        randomnaming.discard(member.id)
-        await ctx.send(f"✅ Pseudo aléatoire de **{member.display_name}** arrêté.")
-    else:
-        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en mode aléatoire.")
-
-vocallocked: dict[int, int] = {}  # user_id -> channel_id
-
-
-@bot.command()
-@is_allowed()
 async def lock(ctx, member: discord.Member, channel_id: int):
     channel = ctx.guild.get_channel(channel_id)
     if not channel or not isinstance(channel, discord.VoiceChannel):
@@ -295,18 +224,49 @@ async def unlock(ctx, member: discord.Member):
         await ctx.send(f"⚠️ **{member.display_name}** n'est pas attaché.")
 
 
-@bot.event
-async def on_voice_state_update(member, before, after):
-    if member.id in vocallocked:
-        locked_channel = member.guild.get_channel(vocallocked[member.id])
-        if locked_channel and after.channel != locked_channel:
+RANDOM_NAMES = [
+    "Bouffon Officiel", "Esclave de Service", "Chien Errant", "Sans Cervelle",
+    "Larbin Numéro 1", "Déchet Ambulant", "Singe Savant", "Rat de Service",
+    "Poulet Mouillé", "Cochon d'Inde", "Gros Nul 3000", "Monsieur Personne",
+    "Bébé Pleurnichard", "Champion du Vide", "Fantôme Inutile", "Clown Principal",
+    "Bouffon de Service", "Pitre Certifié", "Zéro Absolu", "Minus Habens",
+    "Cerveau de Moineau", "Roi des Loosers", "Sous-Sol Intellectuel",
+    "Tête de Chou", "Prince des Nuls", "Seigneur du Vide", "Capitaine Raté",
+    "Maître Gilles", "Idiot du Village", "Branquignol Premium",
+    "Nullité Ambulante", "Génie Inversé", "Prodige du Néant",
+    "Expert en Rien", "Professionnel du Vide"
+]
+
+
+@bot.command()
+@is_allowed()
+async def randomname(ctx, member: discord.Member):
+    if member.id in randomnaming:
+        await ctx.send("⚠️ Déjà en cours pour cette personne.")
+        return
+    randomnaming.add(member.id)
+    await ctx.send(f"🎭 **{member.display_name}** va changer de pseudo toutes les 3s ! (`!stoprandom @user` pour arrêter)")
+
+    async def loop_rename():
+        while member.id in randomnaming:
+            name = random.choice(RANDOM_NAMES)
             try:
-                await member.move_to(locked_channel)
+                await member.edit(nick=name)
             except (discord.Forbidden, discord.HTTPException):
                 pass
-                mutetoggling: set[int] = set()  # user_ids en cours de mutetoggle
-spamming: set[int] = set()       # user_ids en cours de spam MP
-blacklist: set[int] = set()      # user_ids blacklistés
+            await asyncio.sleep(3)
+
+    bot.loop.create_task(loop_rename())
+
+
+@bot.command()
+@is_allowed()
+async def stoprandom(ctx, member: discord.Member):
+    if member.id in randomnaming:
+        randomnaming.discard(member.id)
+        await ctx.send(f"✅ Pseudo aléatoire de **{member.display_name}** arrêté.")
+    else:
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en mode aléatoire.")
 
 
 # ─── MUTETOGGLE ───────────────────────────────────────────────────────────────
@@ -317,7 +277,7 @@ async def mutetoggle(ctx, member: discord.Member):
         await ctx.send("⚠️ Déjà en cours.")
         return
     mutetoggling.add(member.id)
-    await ctx.send(f"🔇🔊 **{member.display_name}** va être mute/demute en boucle ! (`!stopmutetoggle @user` pour arrêter)")
+    await ctx.send(f"🔇🔊 **{member.display_name}** va être mute/unmute en boucle ! (`!stopmutetoggle @user` pour arrêter)")
 
     async def loop_mutetoggle():
         muted = False
@@ -330,7 +290,7 @@ async def mutetoggle(ctx, member: discord.Member):
             await asyncio.sleep(1)
         try:
             await member.edit(mute=False)
-        except:
+        except Exception:
             pass
 
     bot.loop.create_task(loop_mutetoggle())
@@ -403,20 +363,79 @@ async def unbl(ctx, user_id: int):
         await ctx.send(f"⚠️ Cet utilisateur n'est pas blacklisté.")
 
 
-# ─── REBAN AUTO SI BLACKLIST ──────────────────────────────────────────────────
-@bot.event
-async def on_member_join(member):
-    if member.id in blacklist:
-        try:
-            await member.ban(reason="Blacklisté automatiquement")
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+# ─── WHITELIST ────────────────────────────────────────────────────────────────
+@bot.command()
+@is_allowed()
+async def wl(ctx, member: discord.Member):
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("❌ Seul le propriétaire peut modifier la whitelist.")
+        return
+    whitelist.add(member.id)
+    await ctx.send(f"✅ **{member}** ajouté à la whitelist.")
 
 
+@bot.command()
+@is_allowed()
+async def unwl(ctx, member: discord.Member):
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("❌ Seul le propriétaire peut modifier la whitelist.")
+        return
+    if member.id == OWNER_ID:
+        await ctx.send("❌ Impossible de retirer le propriétaire.")
+        return
+    whitelist.discard(member.id)
+    await ctx.send(f"✅ **{member}** retiré de la whitelist.")
 
 
+# ─── HELP ─────────────────────────────────────────────────────────────────────
+@bot.command(name="help")
+@is_allowed()
+async def help_cmd(ctx):
+    embed = discord.Embed(title="📋 Commandes du bot", color=0x2b2d31)
+
+    embed.add_field(name="🔨 Modération", value="""
+`!ban @user [raison]` — Bannir un membre
+`!mute @user` — Mute vocal
+`!unmute @user` — Unmute vocal
+`!timeout @user [minutes]` — Timeout (défaut: 5 min)
+""", inline=False)
+
+    embed.add_field(name="✏️ Pseudo / Laisse", value="""
+`!rename @user [pseudo]` — Changer le pseudo
+`!leash @user` — Mettre en laisse (pseudo forcé + 🦮)
+`!unleash @user` — Retirer la laisse
+`!randomname @user` — Pseudo aléatoire toutes les 3s
+`!stoprandom @user` — Arrêter le pseudo aléatoire
+""", inline=False)
+
+    embed.add_field(name="🌀 Vocal", value="""
+`!move @user` — Déplacer en boucle dans des vocaux aléatoires
+`!stopmove @user` — Arrêter les déplacements
+`!lock @user [channel_id]` — Bloquer dans un salon vocal
+`!unlock @user` — Débloquer du salon vocal
+`!mutetoggle @user` — Mute/unmute en boucle
+`!stopmutetoggle @user` — Arrêter le mutetoggle
+""", inline=False)
+
+    embed.add_field(name="📩 Spam MP", value="""
+`!spam @user [message]` — Spammer un membre en MP
+`!stopspam @user` — Arrêter le spam MP
+""", inline=False)
+
+    embed.add_field(name="⛔ Blacklist", value="""
+`!bl @user [raison]` — Blacklister et bannir définitivement
+`!unbl [user_id]` — Retirer de la blacklist et débannir
+""", inline=False)
+
+    embed.add_field(name="⚙️ Whitelist (owner seulement)", value="""
+`!wl @user` — Autoriser un utilisateur
+`!unwl @user` — Retirer l'autorisation
+""", inline=False)
+
+    await ctx.send(embed=embed)
 
 
 # ─── LANCEMENT ────────────────────────────────────────────────────────────────
 keep_alive()
 bot.run(TOKEN)
+
