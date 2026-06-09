@@ -3,6 +3,7 @@ from discord.ext import commands, tasks
 import asyncio
 import random
 import os
+import time
 from threading import Thread
 from flask import Flask
 
@@ -30,7 +31,11 @@ intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # ─── VARIABLES GLOBALES ───────────────────────────────────────────────────────
-whitelist: set[int] = {OWNER_ID}
+# whitelist_full : accès total à toutes les commandes
+whitelist_full: set[int] = {OWNER_ID}
+# whitelist_cmd : accès limité à certaines commandes {user_id: {cmd1, cmd2, ...}}
+whitelist_cmd: dict[int, set[str]] = {}
+
 leashed: dict[int, str] = {}
 moving: set[int] = set()
 randomnaming: set[int] = set()
@@ -39,13 +44,21 @@ mutetoggling: set[int] = set()
 spamming: set[int] = set()
 blacklist: set[int] = set()
 
+# Anti-spam : {user_id: [timestamps]}
+message_timestamps: dict[int, list] = {}
+
 
 # ─── CHECK PERMISSION ─────────────────────────────────────────────────────────
-def is_allowed():
+def is_allowed(cmd_name: str = None):
     async def predicate(ctx):
-        if ctx.author.id in whitelist:
+        uid = ctx.author.id
+        # Accès total
+        if uid in whitelist_full:
             return True
-        await ctx.send("❌ Tu n'as pas la permission d'utiliser ce bot.")
+        # Accès limité à la commande spécifique
+        if cmd_name and uid in whitelist_cmd and cmd_name in whitelist_cmd[uid]:
+            return True
+        await ctx.send("❌ Tu n'as pas la permission d'utiliser cette commande.")
         return False
     return commands.check(predicate)
 
@@ -99,79 +112,151 @@ async def on_member_join(member):
             pass
 
 
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    content = message.content.strip()
+    content_lower = content.lower()
+
+    # ── "quoi" en fin de phrase ou seul ──
+    if content_lower == "quoi" or content_lower.endswith("quoi") or content_lower.endswith("quoi?") or content_lower.endswith("quoi !") or content_lower.endswith("quoi!"):
+        await message.channel.send("feur")
+
+    # ── Tout en majuscules (5 lettres min pour éviter les faux positifs) ──
+    letters = [c for c in content if c.isalpha()]
+    if len(letters) >= 5 and all(c.isupper() for c in letters):
+        await message.channel.send("cris pas fdp")
+
+    # ── Anti-spam : 4 messages en moins de 5 secondes ──
+    uid = message.author.id
+    now = time.time()
+    if uid not in message_timestamps:
+        message_timestamps[uid] = []
+    message_timestamps[uid] = [t for t in message_timestamps[uid] if now - t < 5]
+    message_timestamps[uid].append(now)
+    if len(message_timestamps[uid]) >= 4:
+        await message.channel.send(f"respire mon reuf")
+        message_timestamps[uid] = []
+
+    await bot.process_commands(message)
+
+
 # ─── COMMANDES ────────────────────────────────────────────────────────────────
 
 @bot.command()
-@is_allowed()
+@is_allowed("ban")
 async def ban(ctx, member: discord.Member, *, reason="Aucune raison"):
-    await member.ban(reason=reason)
-    await ctx.send(f"🔨 **{member}** a été banni. Raison : {reason}")
+    try:
+        await member.ban(reason=reason)
+        await ctx.send(f"🔨 **{member}** a été banni. Raison : {reason}")
+    except discord.Forbidden:
+        await ctx.send(f"❌ Je n'ai pas la permission de bannir **{member}**.")
+    except discord.HTTPException:
+        await ctx.send(f"❌ Erreur lors du ban de **{member}**.")
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("mute")
 async def mute(ctx, member: discord.Member):
-    await member.edit(mute=True)
-    await ctx.send(f"🔇 **{member}** a été mute en vocal.")
+    if not member.voice:
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas dans un salon vocal.")
+        return
+    try:
+        await member.edit(mute=True)
+        await ctx.send(f"🔇 **{member}** a été mute en vocal.")
+    except discord.Forbidden:
+        await ctx.send(f"❌ Je n'ai pas la permission de mute **{member}**.")
+    except discord.HTTPException:
+        await ctx.send(f"❌ Erreur lors du mute de **{member}**.")
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("unmute")
 async def unmute(ctx, member: discord.Member):
-    await member.edit(mute=False)
-    await ctx.send(f"🔊 **{member}** a été unmute.")
+    if not member.voice:
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas dans un salon vocal.")
+        return
+    try:
+        await member.edit(mute=False)
+        await ctx.send(f"🔊 **{member}** a été unmute.")
+    except discord.Forbidden:
+        await ctx.send(f"❌ Je n'ai pas la permission d'unmute **{member}**.")
+    except discord.HTTPException:
+        await ctx.send(f"❌ Erreur lors de l'unmute de **{member}**.")
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("timeout")
 async def timeout(ctx, member: discord.Member, minutes: int = 5):
     from datetime import timedelta
-    duration = discord.utils.utcnow() + timedelta(minutes=minutes)
-    await member.timeout(duration)
-    await ctx.send(f"⏱️ **{member}** a reçu un timeout de {minutes} minute(s).")
+    try:
+        duration = discord.utils.utcnow() + timedelta(minutes=minutes)
+        await member.timeout(duration)
+        await ctx.send(f"⏱️ **{member}** a reçu un timeout de {minutes} minute(s).")
+    except discord.Forbidden:
+        await ctx.send(f"❌ Je n'ai pas la permission de timeout **{member}**.")
+    except discord.HTTPException:
+        await ctx.send(f"❌ Erreur lors du timeout de **{member}**.")
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("rename")
 async def rename(ctx, member: discord.Member, *, new_name: str):
-    await member.edit(nick=new_name)
-    await ctx.send(f"✏️ Pseudo de **{member}** changé en **{new_name}**.")
+    try:
+        await member.edit(nick=new_name)
+        await ctx.send(f"✏️ Pseudo de **{member}** changé en **{new_name}**.")
+    except discord.Forbidden:
+        await ctx.send(f"❌ Je n'ai pas la permission de renommer **{member}**.")
+    except discord.HTTPException:
+        await ctx.send(f"❌ Erreur lors du renommage de **{member}**.")
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("dog")
 async def dog(ctx, member: discord.Member):
     base = member.display_name
     if member.id in leashed:
         base = leashed[member.id].split(" (🦮")[0]
+        await ctx.send(f"⚠️ **{member.display_name}** est déjà dog, mise à jour du pseudo.")
     forced = f"{base} (🦮 de {ctx.author.display_name})"
     leashed[member.id] = forced
     try:
         await member.edit(nick=forced)
+        await ctx.send(f"🦮 **{member.display_name}** est maintenant en laisse !")
     except discord.Forbidden:
-        pass
-    await ctx.send(f"🦮 **{member.display_name}** est maintenant en laisse !")
+        await ctx.send(f"❌ Je n'ai pas la permission de renommer **{member}**.")
+    except discord.HTTPException:
+        await ctx.send(f"❌ Erreur lors du dog de **{member}**.")
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("undog")
 async def undog(ctx, member: discord.Member):
     if member.id in leashed:
         del leashed[member.id]
+        try:
+            await member.edit(nick=None)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
         await ctx.send(f"✅ **{member.display_name}** n'est plus dog.")
     else:
         await ctx.send(f"⚠️ **{member.display_name}** n'est pas dog.")
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("move")
 async def move(ctx, member: discord.Member):
     voice_channels = [c for c in ctx.guild.channels if isinstance(c, discord.VoiceChannel)]
     if len(voice_channels) < 2:
         await ctx.send("⚠️ Pas assez de salons vocaux.")
         return
     if member.id in moving:
-        await ctx.send("⚠️ Cette personne est déjà en cours de déplacement.")
+        await ctx.send(f"⚠️ **{member.display_name}** est déjà en cours de déplacement.")
+        return
+    if not member.voice:
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas dans un salon vocal.")
         return
     moving.add(member.id)
     await ctx.send(f"🌀 **{member.display_name}** va être déplacé en boucle ! (`!stopmove @user` pour arrêter)")
@@ -190,7 +275,7 @@ async def move(ctx, member: discord.Member):
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("stopmove")
 async def stopmove(ctx, member: discord.Member):
     if member.id in moving:
         moving.discard(member.id)
@@ -200,28 +285,32 @@ async def stopmove(ctx, member: discord.Member):
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("lock")
 async def lock(ctx, member: discord.Member, channel_id: int):
     channel = ctx.guild.get_channel(channel_id)
     if not channel or not isinstance(channel, discord.VoiceChannel):
         await ctx.send("⚠️ ID de salon vocal invalide.")
         return
+    if member.id in vocallocked:
+        await ctx.send(f"⚠️ **{member.display_name}** est déjà lock, mise à jour du salon.")
     vocallocked[member.id] = channel.id
     try:
         await member.move_to(channel)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-    await ctx.send(f"🔒 **{member.display_name}** est attaché à **{channel.name}** !")
+        await ctx.send(f"🔒 **{member.display_name}** est attaché à **{channel.name}** !")
+    except discord.Forbidden:
+        await ctx.send(f"❌ Je n'ai pas la permission de déplacer **{member}**.")
+    except discord.HTTPException:
+        await ctx.send(f"❌ Erreur lors du lock (peut-être pas en vocal).")
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("unlock")
 async def unlock(ctx, member: discord.Member):
     if member.id in vocallocked:
         del vocallocked[member.id]
         await ctx.send(f"🔓 **{member.display_name}** n'est plus attaché à un vocal.")
     else:
-        await ctx.send(f"⚠️ **{member.display_name}** n'est pas attaché.")
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas lock.")
 
 
 RANDOM_NAMES = [
@@ -239,19 +328,19 @@ RANDOM_NAMES = [
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("name")
 async def name(ctx, member: discord.Member):
     if member.id in randomnaming:
-        await ctx.send("⚠️ Déjà en cours pour cette personne.")
+        await ctx.send(f"⚠️ **{member.display_name}** est déjà en name.")
         return
     randomnaming.add(member.id)
     await ctx.send(f"🎭 **{member.display_name}** va changer de pseudo toutes les 3s ! (`!unname @user` pour arrêter)")
 
     async def loop_rename():
         while member.id in randomnaming:
-            name = random.choice(RANDOM_NAMES)
+            rname = random.choice(RANDOM_NAMES)
             try:
-                await member.edit(nick=name)
+                await member.edit(nick=rname)
             except (discord.Forbidden, discord.HTTPException):
                 pass
             await asyncio.sleep(3)
@@ -260,7 +349,7 @@ async def name(ctx, member: discord.Member):
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("unname")
 async def unname(ctx, member: discord.Member):
     if member.id in randomnaming:
         randomnaming.discard(member.id)
@@ -269,12 +358,15 @@ async def unname(ctx, member: discord.Member):
         await ctx.send(f"⚠️ **{member.display_name}** n'est pas en name.")
 
 
-# ─── MUTETOGGLE ───────────────────────────────────────────────────────────────
+# ─── MUTESPAM ─────────────────────────────────────────────────────────────────
 @bot.command()
-@is_allowed()
+@is_allowed("mutespam")
 async def mutespam(ctx, member: discord.Member):
     if member.id in mutetoggling:
-        await ctx.send("⚠️ Déjà en cours.")
+        await ctx.send(f"⚠️ **{member.display_name}** est déjà en mutespam.")
+        return
+    if not member.voice:
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas dans un salon vocal.")
         return
     mutetoggling.add(member.id)
     await ctx.send(f"🔇🔊 **{member.display_name}** va être mute/unmute en boucle ! (`!unmutespam @user` pour arrêter)")
@@ -297,7 +389,7 @@ async def mutespam(ctx, member: discord.Member):
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("unmutespam")
 async def unmutespam(ctx, member: discord.Member):
     if member.id in mutetoggling:
         mutetoggling.discard(member.id)
@@ -308,10 +400,10 @@ async def unmutespam(ctx, member: discord.Member):
 
 # ─── SPAM MP ──────────────────────────────────────────────────────────────────
 @bot.command()
-@is_allowed()
+@is_allowed("spam")
 async def spam(ctx, member: discord.Member, *, message: str):
     if member.id in spamming:
-        await ctx.send("⚠️ Déjà en cours.")
+        await ctx.send(f"⚠️ **{member.display_name}** est déjà en spam MP.")
         return
     spamming.add(member.id)
     await ctx.send(f"📩 Spam MP lancé sur **{member.display_name}** ! (`!stopspam @user` pour arrêter)")
@@ -328,46 +420,53 @@ async def spam(ctx, member: discord.Member, *, message: str):
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("stopspam")
 async def stopspam(ctx, member: discord.Member):
     if member.id in spamming:
         spamming.discard(member.id)
         await ctx.send(f"✅ Spam MP de **{member.display_name}** arrêté.")
     else:
-        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en spam.")
+        await ctx.send(f"⚠️ **{member.display_name}** n'est pas en spam MP.")
 
 
 # ─── BLACKLIST ────────────────────────────────────────────────────────────────
 @bot.command()
-@is_allowed()
+@is_allowed("bl")
 async def bl(ctx, member: discord.Member, *, reason="Blacklisté"):
+    if member.id in blacklist:
+        await ctx.send(f"⚠️ **{member}** est déjà blacklisté.")
+        return
     blacklist.add(member.id)
     try:
         await member.ban(reason=reason)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-    await ctx.send(f"⛔ **{member}** a été blacklisté et banni définitivement.")
+        await ctx.send(f"⛔ **{member}** a été blacklisté et banni définitivement.")
+    except discord.Forbidden:
+        await ctx.send(f"❌ Je n'ai pas la permission de bannir **{member}**.")
+    except discord.HTTPException:
+        await ctx.send(f"❌ Erreur lors du ban de **{member}**.")
 
 
 @bot.command()
-@is_allowed()
+@is_allowed("unbl")
 async def unbl(ctx, user_id: int):
     if user_id in blacklist:
         blacklist.discard(user_id)
         try:
             await ctx.guild.unban(discord.Object(id=user_id))
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-        await ctx.send(f"✅ **{user_id}** retiré de la blacklist et débanni.")
+            await ctx.send(f"✅ **{user_id}** retiré de la blacklist et débanni.")
+        except discord.Forbidden:
+            await ctx.send(f"❌ Je n'ai pas la permission de débannir **{user_id}**.")
+        except discord.HTTPException:
+            await ctx.send(f"❌ Erreur lors du déban de **{user_id}**.")
     else:
-        await ctx.send(f"⚠️ Cet utilisateur n'est pas blacklisté.")
+        await ctx.send(f"⚠️ L'utilisateur **{user_id}** n'est pas blacklisté.")
 
 
 # ─── AVB ──────────────────────────────────────────────────────────────────────
 AVB_ROLE_ID = 1508954957762662520
 
 @bot.command()
-@is_allowed()
+@is_allowed("avb")
 async def avb(ctx, member: discord.Member):
     role = ctx.guild.get_role(AVB_ROLE_ID)
     if not role:
@@ -385,19 +484,61 @@ async def avb(ctx, member: discord.Member):
         await ctx.send("❌ Une erreur est survenue lors de l'attribution du rôle.")
 
 
+# ─── HACK (troll) ─────────────────────────────────────────────────────────────
+HACK_LINES = [
+    "```",
+    "[~] Initializing hack sequence...",
+    "[~] Bypassing firewall... DONE",
+    "[~] Accessing Discord servers... DONE",
+    "[~] Extracting user token... ██████████ 100%",
+    "[~] Decrypting password hash... DONE",
+    "[~] Fetching IP address... 192.168.{}.{}".format(random.randint(0,255), random.randint(0,255)),
+    "[~] Retrieving personal data... DONE",
+    "[~] Uploading to remote server...",
+    "```",
+]
+
+@bot.command()
+@is_allowed("hack")
+async def hack(ctx, member: discord.Member):
+    msg = await ctx.send(f"🖥️ Hacking **{member.display_name}**...")
+    await asyncio.sleep(1)
+    lines_so_far = ["```"]
+    steps = [
+        "[~] Initializing hack sequence...",
+        "[~] Bypassing firewall... DONE",
+        "[~] Accessing Discord API... DONE",
+        f"[~] Extracting user token... ██████████ 100%",
+        f"[~] Decrypting password hash... DONE",
+        f"[~] Fetching IP address... {random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
+        f"[~] Location detected... {random.choice(['Paris, FR', 'Lyon, FR', 'Marseille, FR', 'Toulouse, FR'])}",
+        "[~] Retrieving personal files... ██████████ 100%",
+        "[~] Uploading data to remote server...",
+        f"[~] HACK COMPLETE. {member.display_name} has been compromised.",
+    ]
+    for step in steps:
+        lines_so_far.append(step)
+        display = "\n".join(lines_so_far) + "\n```"
+        await msg.edit(content=display)
+        await asyncio.sleep(1.2)
+
+
 # ─── WHITELIST ────────────────────────────────────────────────────────────────
 @bot.command()
-@is_allowed()
 async def wl(ctx, member: discord.Member):
     if ctx.author.id != OWNER_ID:
         await ctx.send("❌ Seul le propriétaire peut modifier la whitelist.")
         return
-    whitelist.add(member.id)
-    await ctx.send(f"✅ **{member}** ajouté à la whitelist.")
+    if member.id in whitelist_full:
+        await ctx.send(f"⚠️ **{member}** a déjà un accès total.")
+        return
+    whitelist_full.add(member.id)
+    # Retirer les accès limités s'il en avait
+    whitelist_cmd.pop(member.id, None)
+    await ctx.send(f"✅ **{member}** a maintenant accès à toutes les commandes.")
 
 
 @bot.command()
-@is_allowed()
 async def unwl(ctx, member: discord.Member):
     if ctx.author.id != OWNER_ID:
         await ctx.send("❌ Seul le propriétaire peut modifier la whitelist.")
@@ -405,13 +546,73 @@ async def unwl(ctx, member: discord.Member):
     if member.id == OWNER_ID:
         await ctx.send("❌ Impossible de retirer le propriétaire.")
         return
-    whitelist.discard(member.id)
-    await ctx.send(f"✅ **{member}** retiré de la whitelist.")
+    if member.id not in whitelist_full and member.id not in whitelist_cmd:
+        await ctx.send(f"⚠️ **{member}** n'a aucune permission.")
+        return
+    whitelist_full.discard(member.id)
+    whitelist_cmd.pop(member.id, None)
+    await ctx.send(f"✅ Toutes les permissions de **{member}** ont été retirées.")
+
+
+@bot.command()
+async def wlcmd(ctx, member: discord.Member, *cmds: str):
+    """Donne accès limité à certaines commandes. Usage: !wlcmd @user cmd1 cmd2"""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("❌ Seul le propriétaire peut modifier la whitelist.")
+        return
+    if member.id in whitelist_full:
+        await ctx.send(f"⚠️ **{member}** a déjà un accès total, inutile de limiter.")
+        return
+    if not cmds:
+        await ctx.send("⚠️ Précise au moins une commande. Ex: `!wlcmd @user ban mute`")
+        return
+    if member.id not in whitelist_cmd:
+        whitelist_cmd[member.id] = set()
+    whitelist_cmd[member.id].update(cmds)
+    liste = ", ".join(f"`!{c}`" for c in whitelist_cmd[member.id])
+    await ctx.send(f"✅ **{member}** peut maintenant utiliser : {liste}")
+
+
+@bot.command()
+async def unwlcmd(ctx, member: discord.Member, *cmds: str):
+    """Retire l'accès à certaines commandes. Usage: !unwlcmd @user cmd1 cmd2"""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("❌ Seul le propriétaire peut modifier la whitelist.")
+        return
+    if not cmds:
+        await ctx.send("⚠️ Précise au moins une commande. Ex: `!unwlcmd @user ban mute`")
+        return
+    if member.id not in whitelist_cmd:
+        await ctx.send(f"⚠️ **{member}** n'a aucune permission limitée.")
+        return
+    for c in cmds:
+        whitelist_cmd[member.id].discard(c)
+    if not whitelist_cmd[member.id]:
+        del whitelist_cmd[member.id]
+        await ctx.send(f"✅ Toutes les permissions limitées de **{member}** ont été retirées.")
+    else:
+        liste = ", ".join(f"`!{c}`" for c in whitelist_cmd[member.id])
+        await ctx.send(f"✅ Permissions mises à jour. **{member}** peut encore : {liste}")
+
+
+@bot.command()
+async def perms(ctx, member: discord.Member):
+    """Voir les permissions d'un utilisateur."""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("❌ Seul le propriétaire peut voir les permissions.")
+        return
+    if member.id in whitelist_full:
+        await ctx.send(f"🔓 **{member}** a un accès **total** à toutes les commandes.")
+    elif member.id in whitelist_cmd:
+        liste = ", ".join(f"`!{c}`" for c in whitelist_cmd[member.id])
+        await ctx.send(f"🔑 **{member}** a accès uniquement à : {liste}")
+    else:
+        await ctx.send(f"⛔ **{member}** n'a aucune permission.")
 
 
 # ─── HELP ─────────────────────────────────────────────────────────────────────
 @bot.command(name="help")
-@is_allowed()
+@is_allowed("help")
 async def help_cmd(ctx):
     embed = discord.Embed(title="📋 Commandes du bot", color=0x2b2d31)
 
@@ -420,6 +621,7 @@ async def help_cmd(ctx):
 `!mute @user` — Mute vocal
 `!unmute @user` — Unmute vocal
 `!timeout @user [minutes]` — Timeout (défaut: 5 min)
+`!hack @user` — 👀
 """, inline=False)
 
     embed.add_field(name="✏️ Pseudo / Laisse", value="""
@@ -454,8 +656,11 @@ async def help_cmd(ctx):
 """, inline=False)
 
     embed.add_field(name="⚙️ Whitelist (owner seulement)", value="""
-`!wl @user` — Autoriser un utilisateur
-`!unwl @user` — Retirer l'autorisation
+`!wl @user` — Accès total à toutes les commandes
+`!unwl @user` — Retirer toutes les permissions
+`!wlcmd @user cmd1 cmd2` — Accès limité à des commandes précises
+`!unwlcmd @user cmd1 cmd2` — Retirer l'accès à des commandes précises
+`!perms @user` — Voir les permissions d'un utilisateur
 """, inline=False)
 
     await ctx.send(embed=embed)
