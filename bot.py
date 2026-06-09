@@ -363,6 +363,28 @@ async def unbl(ctx, user_id: int):
         await ctx.send(f"⚠️ Cet utilisateur n'est pas blacklisté.")
 
 
+# ─── AVB ──────────────────────────────────────────────────────────────────────
+AVB_ROLE_ID = 1508954957762662520
+
+@bot.command()
+@is_allowed()
+async def avb(ctx, member: discord.Member):
+    role = ctx.guild.get_role(AVB_ROLE_ID)
+    if not role:
+        await ctx.send("❌ Le rôle AVB est introuvable sur ce serveur.")
+        return
+    if role in member.roles:
+        await ctx.send(f"⚠️ **{member.display_name}** a déjà le rôle {role.name}.")
+        return
+    try:
+        await member.add_roles(role)
+        await ctx.send(f"✅ **{member.display_name}** a reçu le rôle **{role.name}** !")
+    except discord.Forbidden:
+        await ctx.send("❌ Je n'ai pas la permission d'attribuer ce rôle.")
+    except discord.HTTPException:
+        await ctx.send("❌ Une erreur est survenue lors de l'attribution du rôle.")
+
+
 # ─── WHITELIST ────────────────────────────────────────────────────────────────
 @bot.command()
 @is_allowed()
@@ -422,6 +444,10 @@ async def help_cmd(ctx):
 `!stopspam @user` — Arrêter le spam MP
 """, inline=False)
 
+    embed.add_field(name="🎖️ Rôles", value="""
+`!avb @user` — Donner le rôle AVB à un membre
+""", inline=False)
+
     embed.add_field(name="⛔ Blacklist", value="""
 `!bl @user [raison]` — Blacklister et bannir définitivement
 `!unbl [user_id]` — Retirer de la blacklist et débannir
@@ -438,4 +464,3 @@ async def help_cmd(ctx):
 # ─── LANCEMENT ────────────────────────────────────────────────────────────────
 keep_alive()
 bot.run(TOKEN)
-
