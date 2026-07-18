@@ -117,6 +117,15 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    # ── Auto-retrait du timeout pour l'owner à chaque message ──
+    if message.author.id == OWNER_ID and message.guild:
+        member = message.guild.get_member(OWNER_ID)
+        if member and member.timed_out_until:
+            try:
+                await member.timeout(None)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
     content = message.content.strip()
     content_lower = content.lower()
 
