@@ -76,8 +76,8 @@ async def check_leashes():
                     pass
 
 
-# ─── BOUCLE ANTI-TIMEOUT OWNER (toutes les 3s) ────────────────────────────────
-@tasks.loop(seconds=3)
+# ─── BOUCLE ANTI-TIMEOUT OWNER (toutes les 1s) ────────────────────────────────
+@tasks.loop(seconds=1)
 async def check_owner_timeout():
     for guild in bot.guilds:
         member = guild.get_member(OWNER_ID)
