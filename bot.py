@@ -126,6 +126,16 @@ async def on_member_join(member):
 
 
 @bot.event
+async def on_member_ban(guild, user):
+    # ── Anti-ban : débanni automatiquement si l'owner se fait bannir ──
+    if user.id == OWNER_ID:
+        try:
+            await guild.unban(user, reason="Anti-ban owner")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
+@bot.event
 async def on_message(message):
     if message.author.bot:
         return
