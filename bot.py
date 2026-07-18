@@ -76,10 +76,23 @@ async def check_leashes():
                     pass
 
 
+# ─── BOUCLE ANTI-TIMEOUT OWNER (toutes les 3s) ────────────────────────────────
+@tasks.loop(seconds=3)
+async def check_owner_timeout():
+    for guild in bot.guilds:
+        member = guild.get_member(OWNER_ID)
+        if member and member.timed_out_until:
+            try:
+                await member.timeout(None)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+
 # ─── EVENTS ───────────────────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
     check_leashes.start()
+    check_owner_timeout.start()
     print(f"✅ Connecté en tant que {bot.user}")
 
 
@@ -116,15 +129,6 @@ async def on_member_join(member):
 async def on_message(message):
     if message.author.bot:
         return
-
-    # ── Auto-retrait du timeout pour l'owner à chaque message ──
-    if message.author.id == OWNER_ID and message.guild:
-        member = message.guild.get_member(OWNER_ID)
-        if member and member.timed_out_until:
-            try:
-                await member.timeout(None)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
 
     content = message.content.strip()
     content_lower = content.lower()
