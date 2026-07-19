@@ -150,7 +150,10 @@ async def on_message(message):
     # ── Tout en majuscules (5 lettres min pour éviter les faux positifs) ──
     letters = [c for c in content if c.isalpha()]
     if len(letters) >= 5 and all(c.isupper() for c in letters):
-        await message.channel.send("cris pas fdp")
+        if message.author.id == 1381361986260045965:
+            await message.channel.send("wAllah zz j'en ai marre de te rep")
+        else:
+            await message.channel.send("cris pas fdp")
 
     # ── Anti-spam : 4 messages en moins de 5 secondes ──
     uid = message.author.id
