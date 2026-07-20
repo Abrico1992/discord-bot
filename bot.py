@@ -4,6 +4,7 @@ import asyncio
 import random
 import os
 import time
+import json
 from threading import Thread
 from flask import Flask
 
@@ -29,9 +30,10 @@ EMBED_COLOR = 0x2b2d31
 
 # Commandes valides (pour vérifier /wlcmd et /unwlcmd)
 VALID_COMMANDS = {
-    "ban", "mute", "unmute", "timeout", "rename", "dog", "undog", "move", "stopmove",
+    "ban", "mute", "unmute", "timeout", "rename", "dog", "undog", "undogall", "move", "stopmove",
     "lock", "unlock", "name", "unname", "mutespam", "unmutespam", "spam", "stopspam",
-    "bl", "unbl", "avb", "derank", "hack", "off", "say", "help",
+    "bl", "unbl", "derank", "hack", "off", "say", "help",
+    "pp", "banner", "dog-list", "bl-list", "name-list", "ban-list", "lock-list",
 }
 
 # Paires de commandes opposées : ajouter l'une ajoute automatiquement l'autre
@@ -46,6 +48,9 @@ OPPOSITE_COMMANDS = {
     "bl": "unbl", "unbl": "bl",
 }
 
+# Utilisateur protégé : ne peut être ciblé par aucune commande du bot
+PROTECTED_ID = 1524948006632165437
+
 # ─── SETUP ────────────────────────────────────────────────────────────────────
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
@@ -55,11 +60,20 @@ async def send_embed(ctx, description: str, color: int = EMBED_COLOR):
     embed = discord.Embed(description=description, color=color)
     await ctx.send(embed=embed)
 
+
+async def is_protected(ctx, target_id: int) -> bool:
+    """Si la cible est l'utilisateur protégé, envoie un message et retourne True (la commande doit s'arrêter)."""
+    if target_id == PROTECTED_ID:
+        await send_embed(ctx, "🛡️ Cette action n'est pas autorisée sur cet utilisateur.")
+        return True
+    return False
+
 # ─── VARIABLES GLOBALES ───────────────────────────────────────────────────────
 whitelist_full: set[int] = set(OWNER_IDS)
 whitelist_cmd: dict[int, set[str]] = {}
 
 leashed: dict[int, str] = {}
+original_nicks: dict[int, str | None] = {}
 moving: set[int] = set()
 randomnaming: set[int] = set()
 vocallocked: dict[int, int] = {}
@@ -71,6 +85,66 @@ message_timestamps: dict[int, list] = {}
 
 # Interrupteur global : si False, le bot ne répond plus à rien sauf /on (owner)
 bot_enabled: bool = True
+
+# ─── PERSISTANCE (JSON) ────────────────────────────────────────────────────────
+STATE_FILE = "bot_state.json"
+
+def save_state():
+    data = {
+        "whitelist_full": list(whitelist_full),
+        "whitelist_cmd": {str(k): list(v) for k, v in whitelist_cmd.items()},
+        "leashed": {str(k): v for k, v in leashed.items()},
+        "original_nicks": {str(k): v for k, v in original_nicks.items()},
+        "vocallocked": {str(k): v for k, v in vocallocked.items()},
+        "blacklist": list(blacklist),
+        "bot_enabled": bot_enabled,
+    }
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print(f"⚠️ Impossible de sauvegarder l'état : {e}")
+
+
+def load_state():
+    global bot_enabled
+    if not os.path.exists(STATE_FILE):
+        return
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"⚠️ Impossible de charger l'état : {e}")
+        return
+
+    whitelist_full.clear()
+    whitelist_full.update(data.get("whitelist_full", []))
+    whitelist_full.update(OWNER_IDS)  # sécurité : les owners sont toujours whitelistés
+
+    whitelist_cmd.clear()
+    for k, v in data.get("whitelist_cmd", {}).items():
+        whitelist_cmd[int(k)] = set(v)
+
+    leashed.clear()
+    leashed.update({int(k): v for k, v in data.get("leashed", {}).items()})
+
+    original_nicks.clear()
+    original_nicks.update({int(k): v for k, v in data.get("original_nicks", {}).items()})
+
+    vocallocked.clear()
+    vocallocked.update({int(k): v for k, v in data.get("vocallocked", {}).items()})
+
+    blacklist.clear()
+    blacklist.update(data.get("blacklist", []))
+
+    bot_enabled = data.get("bot_enabled", True)
+    print("✅ État chargé depuis bot_state.json")
+
+
+# Sauvegarde automatique toutes les 15 secondes
+@tasks.loop(seconds=15)
+async def autosave():
+    save_state()
 
 
 # ─── CHECK PERMISSION ─────────────────────────────────────────────────────────
@@ -98,7 +172,7 @@ async def on_command_error(ctx, error):
         await send_embed(ctx, f"⚠️ Il manque un argument : `{error.param.name}`.")
         return
     if isinstance(error, commands.MemberNotFound):
-        await send_embed(ctx, f"⚠️ Membre introuvable : `{error.argument}`.")
+        await send_embed(ctx, "❌ Utilisateur inconnu.")
         return
     if isinstance(error, commands.BadArgument):
         await send_embed(ctx, f"⚠️ Argument invalide : {error}")
@@ -109,6 +183,15 @@ async def on_command_error(ctx, error):
     # Erreur non prévue : on informe l'utilisateur et on log côté serveur
     await send_embed(ctx, f"❌ Erreur lors de l'exécution de la commande : {error}")
     print(f"⚠️ Erreur non gérée dans une commande : {error}")
+
+
+@bot.check
+async def prefix_owner_only(ctx):
+    # Les commandes tapées avec le préfixe "!" sont réservées aux owners.
+    # Pour tout le monde d'autre, le bot ne répond pas du tout (silence total).
+    if ctx.interaction is None and ctx.author.id not in OWNER_IDS:
+        return False
+    return True
 
 
 @bot.check
@@ -152,6 +235,7 @@ async def check_owner_timeout():
 async def on_ready():
     check_leashes.start()
     check_owner_timeout.start()
+    autosave.start()
     try:
         synced = await bot.tree.sync()
         print(f"✅ {len(synced)} commandes slash synchronisées.")
@@ -214,8 +298,6 @@ async def on_message(message):
         if len(letters) >= 5 and all(c.isupper() for c in letters):
             if message.author.id == 1381361986260045965:
                 await message.channel.send("wAllah zz j'en ai marre de te rep")
-            else:
-                await message.channel.send("cris pas fdp")
 
         uid = message.author.id
         now = time.time()
@@ -235,6 +317,8 @@ async def on_message(message):
 @bot.hybrid_command(name="ban", description="Bannir un membre du serveur")
 @is_allowed("ban")
 async def ban(ctx, utilisateur: discord.Member, *, raison: str = "Aucune raison"):
+    if await is_protected(ctx, utilisateur.id):
+        return
     try:
         await utilisateur.ban(reason=raison)
         await send_embed(ctx, f"🔨 **{utilisateur}** a été banni. Raison : {raison}")
@@ -247,6 +331,8 @@ async def ban(ctx, utilisateur: discord.Member, *, raison: str = "Aucune raison"
 @bot.hybrid_command(name="mute", description="Mute un membre en vocal")
 @is_allowed("mute")
 async def mute(ctx, utilisateur: discord.Member):
+    if await is_protected(ctx, utilisateur.id):
+        return
     if not utilisateur.voice:
         await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** n'est pas dans un salon vocal.")
         return
@@ -262,6 +348,8 @@ async def mute(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="unmute", description="Unmute un membre en vocal")
 @is_allowed("unmute")
 async def unmute(ctx, utilisateur: discord.Member):
+    if await is_protected(ctx, utilisateur.id):
+        return
     if not utilisateur.voice:
         await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** n'est pas dans un salon vocal.")
         return
@@ -277,6 +365,8 @@ async def unmute(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="timeout", description="Mettre un membre en timeout")
 @is_allowed("timeout")
 async def timeout(ctx, utilisateur: discord.Member, minutes: int = 5):
+    if await is_protected(ctx, utilisateur.id):
+        return
     from datetime import timedelta
     try:
         duration = discord.utils.utcnow() + timedelta(minutes=minutes)
@@ -291,6 +381,8 @@ async def timeout(ctx, utilisateur: discord.Member, minutes: int = 5):
 @bot.hybrid_command(name="rename", description="Changer le pseudo d'un membre")
 @is_allowed("rename")
 async def rename(ctx, utilisateur: discord.Member, *, pseudo: str):
+    if await is_protected(ctx, utilisateur.id):
+        return
     try:
         await utilisateur.edit(nick=pseudo)
         await send_embed(ctx, f"✏️ Pseudo de **{utilisateur}** changé en **{pseudo}**.")
@@ -303,12 +395,17 @@ async def rename(ctx, utilisateur: discord.Member, *, pseudo: str):
 @bot.hybrid_command(name="dog", description="Mettre un membre en laisse (pseudo forcé)")
 @is_allowed("dog")
 async def dog(ctx, utilisateur: discord.Member):
-    base = utilisateur.display_name
-    if utilisateur.id in leashed:
-        base = leashed[utilisateur.id].split(" (🦮")[0]
+    if await is_protected(ctx, utilisateur.id):
+        return
+    if utilisateur.id not in leashed:
+        original_nicks[utilisateur.id] = utilisateur.nick
+        base = utilisateur.nick or utilisateur.global_name or utilisateur.name
+    else:
+        base = original_nicks.get(utilisateur.id) or utilisateur.global_name or utilisateur.name
         await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** est déjà dog, mise à jour du pseudo.")
     forced = f"{base} (🦮 de {ctx.author.display_name})"
     leashed[utilisateur.id] = forced
+    save_state()
     try:
         await utilisateur.edit(nick=forced)
         await send_embed(ctx, f"🦮 **{utilisateur.display_name}** est maintenant en laisse !")
@@ -323,18 +420,43 @@ async def dog(ctx, utilisateur: discord.Member):
 async def undog(ctx, utilisateur: discord.Member):
     if utilisateur.id in leashed:
         del leashed[utilisateur.id]
+        original_nick = original_nicks.pop(utilisateur.id, None)
+        save_state()
         try:
-            await utilisateur.edit(nick=None)
+            await utilisateur.edit(nick=original_nick)
         except (discord.Forbidden, discord.HTTPException):
             pass
-        await send_embed(ctx, f"✅ **{utilisateur.display_name}** n'est plus dog.")
+        await send_embed(ctx, f"✅ **{utilisateur.display_name}** n'est plus dog, pseudo restauré.")
     else:
         await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** n'est pas dog.")
+
+
+@bot.hybrid_command(name="undogall", description="Retirer la laisse de tout le monde d'un coup")
+@is_allowed("undogall")
+async def undogall(ctx):
+    if not leashed:
+        await send_embed(ctx, "⚠️ Personne n'est actuellement dog.")
+        return
+    count = 0
+    for user_id in list(leashed.keys()):
+        member = ctx.guild.get_member(user_id)
+        original_nick = original_nicks.pop(user_id, None)
+        del leashed[user_id]
+        if member:
+            try:
+                await member.edit(nick=original_nick)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        count += 1
+    save_state()
+    await send_embed(ctx, f"✅ {count} utilisateur(s) ne sont plus dog, pseudos restaurés.")
 
 
 @bot.hybrid_command(name="move", description="Déplacer un membre en boucle dans des vocaux aléatoires")
 @is_allowed("move")
 async def move(ctx, utilisateur: discord.Member):
+    if await is_protected(ctx, utilisateur.id):
+        return
     voice_channels = [c for c in ctx.guild.channels if isinstance(c, discord.VoiceChannel)]
     if len(voice_channels) < 2:
         await send_embed(ctx, "⚠️ Pas assez de salons vocaux.")
@@ -374,6 +496,8 @@ async def stopmove(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="lock", description="Bloquer un membre dans un salon vocal")
 @is_allowed("lock")
 async def lock(ctx, utilisateur: discord.Member, id_salon: str):
+    if await is_protected(ctx, utilisateur.id):
+        return
     try:
         channel_id = int(id_salon)
     except ValueError:
@@ -386,6 +510,7 @@ async def lock(ctx, utilisateur: discord.Member, id_salon: str):
     if utilisateur.id in vocallocked:
         await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** est déjà lock, mise à jour du salon.")
     vocallocked[utilisateur.id] = channel.id
+    save_state()
     try:
         await utilisateur.move_to(channel)
         await send_embed(ctx, f"🔒 **{utilisateur.display_name}** est attaché à **{channel.name}** !")
@@ -400,6 +525,7 @@ async def lock(ctx, utilisateur: discord.Member, id_salon: str):
 async def unlock(ctx, utilisateur: discord.Member):
     if utilisateur.id in vocallocked:
         del vocallocked[utilisateur.id]
+        save_state()
         await send_embed(ctx, f"🔓 **{utilisateur.display_name}** n'est plus attaché à un vocal.")
     else:
         await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** n'est pas lock.")
@@ -422,6 +548,8 @@ RANDOM_NAMES = [
 @bot.hybrid_command(name="name", description="Changer le pseudo d'un membre aléatoirement toutes les 3s")
 @is_allowed("name")
 async def name(ctx, utilisateur: discord.Member):
+    if await is_protected(ctx, utilisateur.id):
+        return
     if utilisateur.id in randomnaming:
         await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** est déjà en name.")
         return
@@ -454,6 +582,8 @@ async def unname(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="mutespam", description="Mute/unmute un membre en boucle")
 @is_allowed("mutespam")
 async def mutespam(ctx, utilisateur: discord.Member):
+    if await is_protected(ctx, utilisateur.id):
+        return
     if utilisateur.id in mutetoggling:
         await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** est déjà en mutespam.")
         return
@@ -494,6 +624,8 @@ async def unmutespam(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="spam", description="Spammer un membre en message privé")
 @is_allowed("spam")
 async def spam(ctx, utilisateur: discord.Member, *, message: str):
+    if await is_protected(ctx, utilisateur.id):
+        return
     if utilisateur.id in spamming:
         await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** est déjà en spam MP.")
         return
@@ -525,10 +657,13 @@ async def stopspam(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="bl", description="Blacklister et bannir définitivement un membre")
 @is_allowed("bl")
 async def bl(ctx, utilisateur: discord.Member, *, raison: str = "Blacklisté"):
+    if await is_protected(ctx, utilisateur.id):
+        return
     if utilisateur.id in blacklist:
         await send_embed(ctx, f"⚠️ **{utilisateur}** est déjà blacklisté.")
         return
     blacklist.add(utilisateur.id)
+    save_state()
     try:
         await utilisateur.ban(reason=raison)
         await send_embed(ctx, f"⛔ **{utilisateur}** a été blacklisté et banni définitivement.")
@@ -544,10 +679,20 @@ async def unbl(ctx, id_utilisateur: str):
     try:
         user_id = int(id_utilisateur)
     except ValueError:
-        await send_embed(ctx, "⚠️ ID invalide.")
+        await send_embed(ctx, "❌ Utilisateur inconnu.")
         return
+    if await is_protected(ctx, user_id):
+        return
+    try:
+        await bot.fetch_user(user_id)
+    except discord.NotFound:
+        await send_embed(ctx, "❌ Utilisateur inconnu.")
+        return
+    except discord.HTTPException:
+        pass
     if user_id in blacklist:
         blacklist.discard(user_id)
+        save_state()
         try:
             await ctx.guild.unban(discord.Object(id=user_id))
             await send_embed(ctx, f"✅ **{user_id}** retiré de la blacklist et débanni.")
@@ -559,31 +704,12 @@ async def unbl(ctx, id_utilisateur: str):
         await send_embed(ctx, f"⚠️ L'utilisateur **{user_id}** n'est pas blacklisté.")
 
 
-# ─── AVB ──────────────────────────────────────────────────────────────────────
-AVB_ROLE_ID = 1524260172258607206
-
-@bot.hybrid_command(name="avb", description="Donner le rôle AVB à un membre")
-@is_allowed("avb")
-async def avb(ctx, utilisateur: discord.Member):
-    role = ctx.guild.get_role(AVB_ROLE_ID)
-    if not role:
-        await send_embed(ctx, "❌ Le rôle AVB est introuvable sur ce serveur.")
-        return
-    if role in utilisateur.roles:
-        await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** a déjà le rôle {role.name}.")
-        return
-    try:
-        await utilisateur.add_roles(role)
-        await send_embed(ctx, f"✅ **{utilisateur.display_name}** a reçu le rôle **{role.name}** !")
-    except discord.Forbidden:
-        await send_embed(ctx, "❌ Je n'ai pas la permission d'attribuer ce rôle.")
-    except discord.HTTPException:
-        await send_embed(ctx, "❌ Une erreur est survenue lors de l'attribution du rôle.")
-
-
+# ─── DERANK ───────────────────────────────────────────────────────────────────
 @bot.hybrid_command(name="derank", description="Retirer tous les rôles d'un membre")
 @is_allowed("derank")
 async def derank(ctx, utilisateur: discord.Member):
+    if await is_protected(ctx, utilisateur.id):
+        return
     roles_to_remove = [r for r in utilisateur.roles if r != ctx.guild.default_role]
     if not roles_to_remove:
         await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** n'a aucun rôle à retirer.")
@@ -597,10 +723,112 @@ async def derank(ctx, utilisateur: discord.Member):
         await send_embed(ctx, f"❌ Erreur lors du retrait des rôles de **{utilisateur}**.")
 
 
+# ─── PROFIL ───────────────────────────────────────────────────────────────────
+@bot.hybrid_command(name="pp", description="Affiche la photo de profil d'un membre")
+@is_allowed("pp")
+async def pp(ctx, utilisateur: discord.Member):
+    embed = discord.Embed(title=f"Photo de profil de {utilisateur.display_name}", color=EMBED_COLOR)
+    embed.set_image(url=utilisateur.display_avatar.url)
+    await ctx.send(embed=embed)
+
+
+@bot.hybrid_command(name="banner", description="Affiche la bannière de profil d'un membre")
+@is_allowed("banner")
+async def banner(ctx, utilisateur: discord.Member):
+    user = await bot.fetch_user(utilisateur.id)
+    if not user.banner:
+        await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** n'a pas de bannière de profil.")
+        return
+    embed = discord.Embed(title=f"Bannière de {utilisateur.display_name}", color=EMBED_COLOR)
+    embed.set_image(url=user.banner.url)
+    await ctx.send(embed=embed)
+
+
+# ─── LISTES ───────────────────────────────────────────────────────────────────
+@bot.hybrid_command(name="dog-list", description="Voir la liste des membres actuellement en laisse")
+@is_allowed("dog-list")
+async def dog_list(ctx):
+    if not leashed:
+        await send_embed(ctx, "📋 Personne n'est actuellement dog.")
+        return
+    lignes = []
+    for user_id, forced_name in leashed.items():
+        member = ctx.guild.get_member(user_id)
+        lignes.append(f"• **{member.display_name if member else user_id}** → `{forced_name}`")
+    await send_embed(ctx, "🦮 **Membres en laisse :**\n" + "\n".join(lignes))
+
+
+@bot.hybrid_command(name="bl-list", description="Voir la liste des utilisateurs blacklistés")
+@is_allowed("bl-list")
+async def bl_list(ctx):
+    if not blacklist:
+        await send_embed(ctx, "📋 La blacklist est vide.")
+        return
+    lignes = [f"• `{uid}`" for uid in blacklist]
+    await send_embed(ctx, "⛔ **Utilisateurs blacklistés :**\n" + "\n".join(lignes))
+
+
+@bot.hybrid_command(name="name-list", description="Voir la liste des membres en pseudo aléatoire")
+@is_allowed("name-list")
+async def name_list(ctx):
+    if not randomnaming:
+        await send_embed(ctx, "📋 Personne n'est actuellement en name.")
+        return
+    lignes = []
+    for user_id in randomnaming:
+        member = ctx.guild.get_member(user_id)
+        lignes.append(f"• **{member.display_name if member else user_id}**")
+    await send_embed(ctx, "🎭 **Membres en pseudo aléatoire :**\n" + "\n".join(lignes))
+
+
+@bot.hybrid_command(name="ban-list", description="Voir la liste des membres bannis du serveur")
+@is_allowed("ban-list")
+async def ban_list(ctx):
+    bans = [entry async for entry in ctx.guild.bans(limit=100)]
+    if not bans:
+        await send_embed(ctx, "📋 Aucun membre banni.")
+        return
+    lignes = [f"• **{entry.user}** — {entry.reason or 'Aucune raison'}" for entry in bans]
+    await send_embed(ctx, "🔨 **Membres bannis :**\n" + "\n".join(lignes))
+
+
+@bot.hybrid_command(name="lock-list", description="Voir la liste des membres lock en vocal")
+@is_allowed("lock-list")
+async def lock_list(ctx):
+    if not vocallocked:
+        await send_embed(ctx, "📋 Personne n'est actuellement lock.")
+        return
+    lignes = []
+    for user_id, channel_id in vocallocked.items():
+        member = ctx.guild.get_member(user_id)
+        channel = ctx.guild.get_channel(channel_id)
+        lignes.append(f"• **{member.display_name if member else user_id}** → {channel.name if channel else channel_id}")
+    await send_embed(ctx, "🔒 **Membres lock en vocal :**\n" + "\n".join(lignes))
+
+
+@bot.hybrid_command(name="wl-list", description="Voir la whitelist complète (owner seulement)")
+async def wl_list(ctx):
+    if ctx.author.id not in OWNER_IDS:
+        await send_embed(ctx, "❌ Seul le propriétaire peut voir la whitelist.")
+        return
+    lignes = []
+    if whitelist_full:
+        lignes.append("🔓 **Accès total :** " + ", ".join(f"<@{uid}>" for uid in whitelist_full))
+    for uid, cmds in whitelist_cmd.items():
+        liste = ", ".join(f"`/{c}`" for c in cmds)
+        lignes.append(f"🔑 <@{uid}> → {liste}")
+    if not lignes:
+        await send_embed(ctx, "📋 La whitelist est vide.")
+        return
+    await send_embed(ctx, "\n".join(lignes))
+
+
 # ─── HACK (troll) ─────────────────────────────────────────────────────────────
 @bot.hybrid_command(name="hack", description="Faux hack pour troll un membre")
 @is_allowed("hack")
 async def hack(ctx, utilisateur: discord.Member):
+    if await is_protected(ctx, utilisateur.id):
+        return
     embed = discord.Embed(description=f"🖥️ Hacking **{utilisateur.display_name}**...", color=EMBED_COLOR)
     msg = await ctx.send(embed=embed)
     await asyncio.sleep(1)
@@ -631,6 +859,7 @@ async def hack(ctx, utilisateur: discord.Member):
 async def off(ctx):
     global bot_enabled
     bot_enabled = False
+    save_state()
     await send_embed(ctx, "🔴 Bot désactivé. Seul `/on` (owner) peut le réactiver.")
 
 
@@ -641,6 +870,7 @@ async def on(ctx):
         await send_embed(ctx, "❌ Seul le propriétaire peut réactiver le bot.")
         return
     bot_enabled = True
+    save_state()
     await send_embed(ctx, "🟢 Bot réactivé.")
 
 
@@ -680,6 +910,7 @@ async def reset(ctx):
     whitelist_full.clear()
     whitelist_full.update(OWNER_IDS)
     bot_enabled = True
+    save_state()
 
     await send_embed(ctx, "♻️ Tout a été réinitialisé : laisses, blacklist, pseudos aléatoires, locks vocaux, mutespam, spam MP, whitelist (owners conservés), et le bot est réactivé.")
 
@@ -695,6 +926,7 @@ async def wl(ctx, utilisateur: discord.Member):
         return
     whitelist_full.add(utilisateur.id)
     whitelist_cmd.pop(utilisateur.id, None)
+    save_state()
     await send_embed(ctx, f"✅ **{utilisateur}** a maintenant accès à toutes les commandes.")
 
 
@@ -711,6 +943,7 @@ async def unwl(ctx, utilisateur: discord.Member):
         return
     whitelist_full.discard(utilisateur.id)
     whitelist_cmd.pop(utilisateur.id, None)
+    save_state()
     await send_embed(ctx, f"✅ Toutes les permissions de **{utilisateur}** ont été retirées.")
 
 
@@ -756,6 +989,7 @@ async def wlcmd(ctx, utilisateur: discord.Member, *, commandes: str):
         liste_invalides = ", ".join(f"`{c}`" for c in invalides)
         description += f"\n❌ Commande(s) introuvable(s), ignorée(s) : {liste_invalides}"
 
+    save_state()
     await send_embed(ctx, description)
 
 
@@ -782,8 +1016,10 @@ async def unwlcmd(ctx, utilisateur: discord.Member, *, commandes: str):
         whitelist_cmd[utilisateur.id].discard(c)
     if not whitelist_cmd[utilisateur.id]:
         del whitelist_cmd[utilisateur.id]
+        save_state()
         await send_embed(ctx, f"✅ Toutes les permissions limitées de **{utilisateur}** ont été retirées.")
     else:
+        save_state()
         liste = ", ".join(f"`/{c}`" for c in whitelist_cmd[utilisateur.id])
         await send_embed(ctx, f"✅ Permissions mises à jour. **{utilisateur}** peut encore : {liste}")
 
@@ -820,8 +1056,11 @@ async def help_cmd(ctx):
 `/rename utilisateur pseudo` — Changer le pseudo
 `/dog utilisateur` — Mettre en laisse (pseudo forcé + 🦮)
 `/undog utilisateur` — Retirer la laisse
+`/undogall` — Retirer la laisse de tout le monde
+`/dog-list` — Voir les membres en laisse
 `/name utilisateur` — Pseudo aléatoire toutes les 3s
 `/unname utilisateur` — Arrêter le pseudo aléatoire
+`/name-list` — Voir les membres en pseudo aléatoire
 """, inline=False)
 
     embed.add_field(name="🌀 Vocal", value="""
@@ -829,6 +1068,7 @@ async def help_cmd(ctx):
 `/stopmove utilisateur` — Arrêter les déplacements
 `/lock utilisateur id_salon` — Bloquer dans un salon vocal
 `/unlock utilisateur` — Débloquer du salon vocal
+`/lock-list` — Voir les membres lock
 `/mutespam utilisateur` — Mute/unmute en boucle
 `/unmutespam utilisateur` — Arrêter le mutespam
 """, inline=False)
@@ -838,8 +1078,12 @@ async def help_cmd(ctx):
 `/stopspam utilisateur` — Arrêter le spam MP
 """, inline=False)
 
+    embed.add_field(name="🖼️ Profil", value="""
+`/pp utilisateur` — Afficher la photo de profil
+`/banner utilisateur` — Afficher la bannière de profil
+""", inline=False)
+
     embed.add_field(name="🎖️ Rôles", value="""
-`/avb utilisateur` — Donner le rôle AVB à un membre
 `/derank utilisateur` — Retirer tous les rôles d'un membre
 """, inline=False)
 
@@ -853,6 +1097,8 @@ async def help_cmd(ctx):
     embed.add_field(name="⛔ Blacklist", value="""
 `/bl utilisateur raison` — Blacklister et bannir définitivement
 `/unbl id_utilisateur` — Retirer de la blacklist et débannir
+`/bl-list` — Voir la liste des blacklistés
+`/ban-list` — Voir la liste des membres bannis du serveur
 """, inline=False)
 
     embed.add_field(name="⚙️ Whitelist (owner seulement)", value="""
@@ -861,6 +1107,7 @@ async def help_cmd(ctx):
 `/wlcmd utilisateur commandes` — Accès limité à des commandes précises
 `/unwlcmd utilisateur commandes` — Retirer l'accès à des commandes précises
 `/perms utilisateur` — Voir les permissions d'un utilisateur
+`/wl-list` — Voir la whitelist complète
 """, inline=False)
 
     await ctx.send(embed=embed)
@@ -868,4 +1115,5 @@ async def help_cmd(ctx):
 
 # ─── LANCEMENT ────────────────────────────────────────────────────────────────
 keep_alive()
+load_state()
 bot.run(TOKEN)
