@@ -53,6 +53,9 @@ OPPOSITE_COMMANDS = {
 # Utilisateur protégé : ne peut être ciblé par aucune commande du bot
 PROTECTED_ID = 1524948006632165437
 
+# Salon dans lequel /help doit obligatoirement être utilisé
+HELP_CHANNEL_ID = 1524249709210767471
+
 # Détecte un suffixe "(🦮 de X)" dans un pseudo, peu importe s'il a été posé via /dog ou non
 DOG_SUFFIX_PATTERN = re.compile(r"\s*\(🦮 de [^)]*\)\s*$")
 
@@ -1076,6 +1079,10 @@ async def perms(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="help", description="Affiche la liste des commandes")
 @is_allowed("help")
 async def help_cmd(ctx):
+    if ctx.channel.id != HELP_CHANNEL_ID:
+        await send_embed(ctx, f"⚠️ Cette commande n'est utilisable que dans <#{HELP_CHANNEL_ID}>.")
+        return
+
     embed = discord.Embed(title="📋 Commandes du bot", color=EMBED_COLOR)
 
     embed.add_field(name="🔨 Modération", value="""
