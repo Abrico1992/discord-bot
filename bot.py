@@ -516,6 +516,22 @@ async def avb(ctx, utilisateur: discord.Member):
         await ctx.send("❌ Une erreur est survenue lors de l'attribution du rôle.")
 
 
+@bot.hybrid_command(name="derank", description="Retirer tous les rôles d'un membre")
+@is_allowed("derank")
+async def derank(ctx, utilisateur: discord.Member):
+    roles_to_remove = [r for r in utilisateur.roles if r != ctx.guild.default_role]
+    if not roles_to_remove:
+        await ctx.send(f"⚠️ **{utilisateur.display_name}** n'a aucun rôle à retirer.")
+        return
+    try:
+        await utilisateur.remove_roles(*roles_to_remove)
+        await ctx.send(f"✅ Tous les rôles de **{utilisateur.display_name}** ont été retirés.")
+    except discord.Forbidden:
+        await ctx.send(f"❌ Je n'ai pas la permission de retirer les rôles de **{utilisateur}**.")
+    except discord.HTTPException:
+        await ctx.send(f"❌ Erreur lors du retrait des rôles de **{utilisateur}**.")
+
+
 # ─── HACK (troll) ─────────────────────────────────────────────────────────────
 @bot.hybrid_command(name="hack", description="Faux hack pour troll un membre")
 @is_allowed("hack")
@@ -674,6 +690,7 @@ async def help_cmd(ctx):
 
     embed.add_field(name="🎖️ Rôles", value="""
 `/avb utilisateur` — Donner le rôle AVB à un membre
+`/derank utilisateur` — Retirer tous les rôles d'un membre
 """, inline=False)
 
     embed.add_field(name="💬 Divers", value="""
