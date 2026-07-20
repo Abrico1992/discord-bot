@@ -30,7 +30,7 @@ EMBED_COLOR = 0x2b2d31
 
 # Commandes valides (pour vérifier /wlcmd et /unwlcmd)
 VALID_COMMANDS = {
-    "ban", "mute", "unmute", "timeout", "rename", "dog", "undog", "undogall", "move", "stopmove",
+    "ban", "mute", "unmute", "to", "unto", "rename", "dog", "undog", "undogall", "move", "stopmove",
     "lock", "unlock", "name", "unname", "mutespam", "unmutespam", "spam", "stopspam",
     "bl", "unbl", "derank", "hack", "off", "say", "help",
     "pp", "banner", "dog-list", "bl-list", "name-list", "ban-list", "lock-list",
@@ -46,6 +46,7 @@ OPPOSITE_COMMANDS = {
     "mutespam": "unmutespam", "unmutespam": "mutespam",
     "spam": "stopspam", "stopspam": "spam",
     "bl": "unbl", "unbl": "bl",
+    "to": "unto", "unto": "to",
 }
 
 # Utilisateur protégé : ne peut être ciblé par aucune commande du bot
@@ -362,9 +363,9 @@ async def unmute(ctx, utilisateur: discord.Member):
         await send_embed(ctx, f"❌ Erreur lors de l'unmute de **{utilisateur}**.")
 
 
-@bot.hybrid_command(name="timeout", description="Mettre un membre en timeout")
-@is_allowed("timeout")
-async def timeout(ctx, utilisateur: discord.Member, minutes: int = 5):
+@bot.hybrid_command(name="to", description="Mettre un membre en timeout")
+@is_allowed("to")
+async def to(ctx, utilisateur: discord.Member, minutes: int = 5):
     if await is_protected(ctx, utilisateur.id):
         return
     from datetime import timedelta
@@ -376,6 +377,21 @@ async def timeout(ctx, utilisateur: discord.Member, minutes: int = 5):
         await send_embed(ctx, f"❌ Je n'ai pas la permission de timeout **{utilisateur}**.")
     except discord.HTTPException:
         await send_embed(ctx, f"❌ Erreur lors du timeout de **{utilisateur}**.")
+
+
+@bot.hybrid_command(name="unto", description="Retirer le timeout d'un membre")
+@is_allowed("unto")
+async def unto(ctx, utilisateur: discord.Member):
+    if not utilisateur.timed_out_until:
+        await send_embed(ctx, f"⚠️ **{utilisateur.display_name}** n'est pas en timeout.")
+        return
+    try:
+        await utilisateur.timeout(None)
+        await send_embed(ctx, f"✅ Timeout de **{utilisateur}** retiré.")
+    except discord.Forbidden:
+        await send_embed(ctx, f"❌ Je n'ai pas la permission de retirer le timeout de **{utilisateur}**.")
+    except discord.HTTPException:
+        await send_embed(ctx, f"❌ Erreur lors du retrait du timeout de **{utilisateur}**.")
 
 
 @bot.hybrid_command(name="rename", description="Changer le pseudo d'un membre")
@@ -1048,7 +1064,8 @@ async def help_cmd(ctx):
 `/ban utilisateur raison` — Bannir un membre
 `/mute utilisateur` — Mute vocal
 `/unmute utilisateur` — Unmute vocal
-`/timeout utilisateur minutes` — Timeout (défaut: 5 min)
+`/to utilisateur minutes` — Timeout (défaut: 5 min)
+`/unto utilisateur` — Retirer le timeout
 `/hack utilisateur` — 👀
 """, inline=False)
 
