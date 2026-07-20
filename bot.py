@@ -44,6 +44,9 @@ blacklist: set[int] = set()
 
 message_timestamps: dict[int, list] = {}
 
+# Interrupteur global : si False, le bot ne répond plus à rien sauf /on (owner)
+bot_enabled: bool = True
+
 
 # ─── CHECK PERMISSION ─────────────────────────────────────────────────────────
 def is_allowed(cmd_name: str = None):
@@ -56,6 +59,16 @@ def is_allowed(cmd_name: str = None):
         await ctx.send("❌ Tu n'as pas la permission d'utiliser cette commande.")
         return False
     return commands.check(predicate)
+
+
+@bot.check
+async def global_off_switch(ctx):
+    # Quand le bot est off, seul /on (owner uniquement) passe
+    if ctx.command and ctx.command.name == "on":
+        return True
+    if not bot_enabled:
+        return False
+    return True
 
 
 # ─── BOUCLE LAISSE (toutes les 5s) ────────────────────────────────────────────
@@ -142,25 +155,26 @@ async def on_message(message):
     content = message.content.strip()
     content_lower = content.lower()
 
-    if content_lower == "quoi" or content_lower.endswith("quoi") or content_lower.endswith("quoi?") or content_lower.endswith("quoi !") or content_lower.endswith("quoi!"):
-        await message.channel.send("feur")
+    if bot_enabled:
+        if content_lower == "quoi" or content_lower.endswith("quoi") or content_lower.endswith("quoi?") or content_lower.endswith("quoi !") or content_lower.endswith("quoi!"):
+            await message.channel.send("feur")
 
-    letters = [c for c in content if c.isalpha()]
-    if len(letters) >= 5 and all(c.isupper() for c in letters):
-        if message.author.id == 1381361986260045965:
-            await message.channel.send("wAllah zz j'en ai marre de te rep")
-        else:
-            await message.channel.send("cris pas fdp")
+        letters = [c for c in content if c.isalpha()]
+        if len(letters) >= 5 and all(c.isupper() for c in letters):
+            if message.author.id == 1381361986260045965:
+                await message.channel.send("wAllah zz j'en ai marre de te rep")
+            else:
+                await message.channel.send("cris pas fdp")
 
-    uid = message.author.id
-    now = time.time()
-    if uid not in message_timestamps:
-        message_timestamps[uid] = []
-    message_timestamps[uid] = [t for t in message_timestamps[uid] if now - t < 5]
-    message_timestamps[uid].append(now)
-    if len(message_timestamps[uid]) >= 4:
-        await message.channel.send(f"respire mon reuf")
-        message_timestamps[uid] = []
+        uid = message.author.id
+        now = time.time()
+        if uid not in message_timestamps:
+            message_timestamps[uid] = []
+        message_timestamps[uid] = [t for t in message_timestamps[uid] if now - t < 5]
+        message_timestamps[uid].append(now)
+        if len(message_timestamps[uid]) >= 4:
+            await message.channel.send(f"respire mon reuf")
+            message_timestamps[uid] = []
 
     await bot.process_commands(message)
 
@@ -558,6 +572,25 @@ async def hack(ctx, utilisateur: discord.Member):
         await asyncio.sleep(1.2)
 
 
+# ─── OFF / ON ─────────────────────────────────────────────────────────────────
+@bot.hybrid_command(name="off", description="Désactive le bot entièrement (sauf /on)")
+@is_allowed("off")
+async def off(ctx):
+    global bot_enabled
+    bot_enabled = False
+    await ctx.send("🔴 Bot désactivé. Seul `/on` (owner) peut le réactiver.")
+
+
+@bot.hybrid_command(name="on", description="Réactive le bot (owner uniquement)")
+async def on(ctx):
+    global bot_enabled
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("❌ Seul le propriétaire peut réactiver le bot.")
+        return
+    bot_enabled = True
+    await ctx.send("🟢 Bot réactivé.")
+
+
 # ─── SAY ──────────────────────────────────────────────────────────────────────
 @bot.hybrid_command(name="say", description="Le bot répète exactement le message donné")
 @is_allowed("say")
@@ -695,6 +728,8 @@ async def help_cmd(ctx):
 
     embed.add_field(name="💬 Divers", value="""
 `/say message` — Le bot répète exactement le message
+`/off` — Désactive le bot entièrement
+`/on` — Réactive le bot (owner uniquement)
 """, inline=False)
 
     embed.add_field(name="⛔ Blacklist", value="""
