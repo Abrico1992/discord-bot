@@ -495,7 +495,7 @@ async def unbl(ctx, id_utilisateur: str):
 
 
 # ─── AVB ──────────────────────────────────────────────────────────────────────
-AVB_ROLE_ID = 1508954957762662520
+AVB_ROLE_ID = 1524260172258607206
 
 @bot.hybrid_command(name="avb", description="Donner le rôle AVB à un membre")
 @is_allowed("avb")
