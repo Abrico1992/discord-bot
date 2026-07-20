@@ -542,6 +542,15 @@ async def hack(ctx, utilisateur: discord.Member):
         await asyncio.sleep(1.2)
 
 
+# ─── SAY ──────────────────────────────────────────────────────────────────────
+@bot.hybrid_command(name="say", description="Le bot répète exactement le message donné")
+@is_allowed("say")
+async def say(ctx, *, message: str):
+    if ctx.interaction:
+        await ctx.interaction.response.send_message("✅ Envoyé.", ephemeral=True)
+    await ctx.channel.send(message)
+
+
 # ─── WHITELIST ────────────────────────────────────────────────────────────────
 @bot.hybrid_command(name="wl", description="Donner un accès total à un membre (owner seulement)")
 async def wl(ctx, utilisateur: discord.Member):
@@ -665,6 +674,10 @@ async def help_cmd(ctx):
 
     embed.add_field(name="🎖️ Rôles", value="""
 `/avb utilisateur` — Donner le rôle AVB à un membre
+""", inline=False)
+
+    embed.add_field(name="💬 Divers", value="""
+`/say message` — Le bot répète exactement le message
 """, inline=False)
 
     embed.add_field(name="⛔ Blacklist", value="""
