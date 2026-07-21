@@ -576,7 +576,7 @@ RANDOM_NAMES = [
     "Larbin Numéro 1", "Déchet Ambulant", "Singe Savant", "Rat de Service",
     "Poulet Mouillé", "Cochon d'Inde", "Gros Nul 3000", "Monsieur Personne",
     "Bébé Pleurnichard", "Champion du Vide", "Fantôme Inutile", "Clown Principal",
-    "Bouffon de Service", "Pitre Certifié", "Zéro Absolu", "Minus Habens",
+    "Bouffon de Service", "Pitre Certifié", "Zéro Absolu", "Gros Fils de Pute",
     "Cerveau de Moineau", "Roi des Loosers", "Sous-Sol Intellectuel",
     "Tête de Chou", "Prince des Nuls", "Seigneur du Vide", "Capitaine Raté",
     "Maître Gilles", "Idiot du Village", "Branquignol Premium",
