@@ -91,7 +91,7 @@ blacklist: set[int] = set()
 
 message_timestamps: dict[int, list] = {}
 
-# Interrupteur global : si False, le bot ne répond plus à rien sauf /on (owner)
+# Interrupteur global : si False, le bot ne répond plus  rien sauf /on (owner)
 bot_enabled: bool = True
 
 # ─── PERSISTANCE (JSON) ────────────────────────────────────────────────────────
