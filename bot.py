@@ -176,7 +176,7 @@ def is_allowed(cmd_name: str = None):
 
 @bot.event
 async def on_command_error(ctx, error):
-    # CommandNotFound : commande inexistante tapée avec le préfixe, on ignore
+    # CommandNotFound : commande inexistante tapé avec le préfixe, on ignore
     if isinstance(error, commands.CommandNotFound):
         return
     # CheckFailure : déjà géré (message envoyé par is_allowed ou switch off silencieux)
