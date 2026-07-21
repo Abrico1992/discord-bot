@@ -66,7 +66,13 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 # ─── HELPER EMBED ─────────────────────────────────────────────────────────────
 async def send_embed(ctx, description: str, color: int = EMBED_COLOR):
     embed = discord.Embed(description=description, color=color)
-    await ctx.send(embed=embed)
+    try:
+        if ctx.interaction and not ctx.interaction.response.is_done():
+            await ctx.interaction.response.send_message(embed=embed)
+        else:
+            await ctx.send(embed=embed)
+    except discord.HTTPException as e:
+        print(f"Impossible d'envoyer un embed : {e}")
 
 
 async def is_protected(ctx, target_id: int) -> bool:
