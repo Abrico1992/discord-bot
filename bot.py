@@ -510,6 +510,10 @@ async def dog(ctx, utilisateur: discord.Member):
         await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà dog.")
         return
 
+    if utilisateur.id in randomnaming:
+        await send_embed(ctx, f"❌ {utilisateur.mention} est déjà en name, impossible de le dog.")
+        return
+
     # Vérifie la limite de laisses simultanées de l'auteur (si une limite lui a été fixée via /doglimit)
     if ctx.author.id in dog_limits:
         limite = dog_limits[ctx.author.id]
@@ -750,6 +754,9 @@ async def name(ctx, utilisateur: discord.Member):
         return
     if utilisateur.id in randomnaming:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà en name.")
+        return
+    if utilisateur.id in leashed:
+        await send_embed(ctx, f"❌ {utilisateur.mention} est déjà dog, impossible de le mettre en name.")
         return
     name_original_nicks[utilisateur.id] = utilisateur.nick
     save_state()
