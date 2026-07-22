@@ -32,7 +32,7 @@ EMBED_COLOR = 0x2b2d31
 # Commandes valides (pour vérifier /wlcmd et /unwlcmd)
 VALID_COMMANDS = {
     "ban", "unban", "mute", "unmute", "to", "unto", "rename", "dog", "undog", "undogall", "move", "stopmove",
-    "lock", "unlock", "name", "unname", "namelock", "unnamelock", "lockname", "unlockname",
+    "lock", "unlock", "name", "unname", "lockname", "unlockname",
     "mutespam", "unmutespam", "spam", "stopspam",
     "bl", "unbl", "derank", "hack", "off", "say", "help",
     "pp", "banner", "dog-list", "bl-list", "name-list", "ban-list", "lock-list",
@@ -50,7 +50,6 @@ OPPOSITE_COMMANDS = {
     "spam": "stopspam", "stopspam": "spam",
     "bl": "unbl", "unbl": "bl",
     "to": "unto", "unto": "to",
-    "namelock": "unnamelock", "unnamelock": "namelock",
     "lockname": "unlockname", "unlockname": "lockname",
 }
 
@@ -88,8 +87,6 @@ leashed: dict[int, str] = {}
 leashed_by: dict[int, int] = {}  # id de la cible -> id de celui qui l'a dog
 dog_limits: dict[int, int] = {}  # id de celui qui pose des laisses -> nombre max de laisses simultanées
 original_nicks: dict[int, str | None] = {}
-namelocked: dict[int, str] = {}
-namelock_original_nicks: dict[int, str | None] = {}
 locknamed: dict[int, str] = {}
 lockname_original_nicks: dict[int, str | None] = {}
 moving: set[int] = set()
@@ -116,8 +113,6 @@ def save_state():
         "leashed_by": {str(k): v for k, v in leashed_by.items()},
         "dog_limits": {str(k): v for k, v in dog_limits.items()},
         "original_nicks": {str(k): v for k, v in original_nicks.items()},
-        "namelocked": {str(k): v for k, v in namelocked.items()},
-        "namelock_original_nicks": {str(k): v for k, v in namelock_original_nicks.items()},
         "locknamed": {str(k): v for k, v in locknamed.items()},
         "lockname_original_nicks": {str(k): v for k, v in lockname_original_nicks.items()},
         "name_original_nicks": {str(k): v for k, v in name_original_nicks.items()},
@@ -162,12 +157,6 @@ def load_state():
 
     original_nicks.clear()
     original_nicks.update({int(k): v for k, v in data.get("original_nicks", {}).items()})
-
-    namelocked.clear()
-    namelocked.update({int(k): v for k, v in data.get("namelocked", {}).items()})
-
-    namelock_original_nicks.clear()
-    namelock_original_nicks.update({int(k): v for k, v in data.get("namelock_original_nicks", {}).items()})
 
     locknamed.clear()
     locknamed.update({int(k): v for k, v in data.get("locknamed", {}).items()})
@@ -262,13 +251,6 @@ async def check_leashes():
                     await member.edit(nick=forced_name)
                 except discord.Forbidden:
                     pass
-        for user_id, forced_name in list(namelocked.items()):
-            member = guild.get_member(user_id)
-            if member and member.display_name != forced_name:
-                try:
-                    await member.edit(nick=forced_name)
-                except discord.Forbidden:
-                    pass
 
 
 # ─── BOUCLE LOCKNAME (toutes les 1.5s) ────────────────────────────────────────
@@ -317,11 +299,6 @@ async def on_member_update(before, after):
     if after.id in leashed and after.display_name != leashed[after.id]:
         try:
             await after.edit(nick=leashed[after.id])
-        except discord.Forbidden:
-            pass
-    if after.id in namelocked and after.display_name != namelocked[after.id]:
-        try:
-            await after.edit(nick=namelocked[after.id])
         except discord.Forbidden:
             pass
     if after.id in locknamed and after.display_name != locknamed[after.id]:
@@ -620,42 +597,6 @@ async def unwldoglimit(ctx, utilisateur: discord.Member):
         await send_embed(ctx, f"✅ {utilisateur.mention} n'a plus de limite de dog (illimité).")
     else:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a aucune limite de dog définie.")
-
-
-@bot.hybrid_command(name="namelock", description="Verrouiller le pseudo d'un membre sur un nom fixe")
-@is_allowed("namelock")
-async def namelock(ctx, utilisateur: discord.Member, *, pseudo: str):
-    if await is_protected(ctx, utilisateur.id):
-        return
-    if utilisateur.id not in namelocked:
-        namelock_original_nicks[utilisateur.id] = utilisateur.nick
-    else:
-        await send_embed(ctx, f"⚠️ Le pseudo de {utilisateur.mention} était déjà verrouillé, mise à jour.")
-    namelocked[utilisateur.id] = pseudo
-    save_state()
-    try:
-        await utilisateur.edit(nick=pseudo)
-        await send_embed(ctx, f"🔒 Le pseudo de {utilisateur.mention} est maintenant verrouillé sur **{pseudo}**.")
-    except discord.Forbidden:
-        await send_embed(ctx, f"❌ Je n'ai pas la permission de renommer {utilisateur.mention}.")
-    except discord.HTTPException:
-        await send_embed(ctx, f"❌ Erreur lors du namelock de {utilisateur.mention}.")
-
-
-@bot.hybrid_command(name="unnamelock", description="Déverrouiller le pseudo d'un membre")
-@is_allowed("unnamelock")
-async def unnamelock(ctx, utilisateur: discord.Member):
-    if utilisateur.id in namelocked:
-        del namelocked[utilisateur.id]
-        original_nick = namelock_original_nicks.pop(utilisateur.id, None)
-        save_state()
-        try:
-            await utilisateur.edit(nick=original_nick)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-        await send_embed(ctx, f"✅ Pseudo de {utilisateur.mention} déverrouillé, pseudo restauré.")
-    else:
-        await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a pas de pseudo verrouillé.")
 
 
 @bot.hybrid_command(name="lockname", description="Verrouiller le pseudo d'un membre (vérifié et remis toutes les 1.5s)")
@@ -1136,19 +1077,10 @@ async def reset(ctx):
         await send_embed(ctx, "❌ Seul le propriétaire peut utiliser /reset.")
         return
 
-    # Retire les pseudos forcés avant de vider la liste des laisses et des namelocks
+    # Retire les pseudos forcés avant de vider la liste des laisses
     for user_id in list(leashed.keys()):
         member = ctx.guild.get_member(user_id)
         original_nick = original_nicks.get(user_id)
-        if member:
-            try:
-                await member.edit(nick=original_nick)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-
-    for user_id in list(namelocked.keys()):
-        member = ctx.guild.get_member(user_id)
-        original_nick = namelock_original_nicks.get(user_id)
         if member:
             try:
                 await member.edit(nick=original_nick)
@@ -1177,8 +1109,6 @@ async def reset(ctx):
     leashed_by.clear()
     dog_limits.clear()
     original_nicks.clear()
-    namelocked.clear()
-    namelock_original_nicks.clear()
     locknamed.clear()
     lockname_original_nicks.clear()
     name_original_nicks.clear()
@@ -1349,8 +1279,6 @@ async def help_cmd(ctx):
 `/name utilisateur` — Pseudo aléatoire toutes les 3s
 `/unname utilisateur` — Arrêter le pseudo aléatoire
 `/name-list` — Voir les membres en pseudo aléatoire
-`/namelock utilisateur pseudo` — Verrouiller le pseudo sur un nom fixe
-`/unnamelock utilisateur` — Déverrouiller le pseudo
 `/lockname utilisateur pseudo` — Verrouiller le pseudo, vérifié et remis toutes les 1.5s
 `/unlockname utilisateur` — Retirer le lockname
 """, inline=False)
