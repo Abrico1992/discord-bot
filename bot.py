@@ -14,7 +14,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot en ligne 🇩🇯"
+    return "Bot en ligne ✅"
 
 def run_server():
     app.run(host="0.0.0.0", port=3000)
@@ -25,20 +25,22 @@ def keep_alive():
     t.start()
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-OWNER_IDS = {1524948006632165437, 1368269462087794888}
+OWNER_IDS = {1524948006632165437}
 TOKEN = os.environ.get("DISCORD_TOKEN")
 EMBED_COLOR = 0x2b2d31
 
 # Commandes valides (pour vérifier /wlcmd et /unwlcmd)
 VALID_COMMANDS = {
-    "ban", "mute", "unmute", "to", "unto", "rename", "dog", "undog", "undogall", "move", "stopmove",
-    "lock", "unlock", "name", "unname", "mutespam", "unmutespam", "spam", "stopspam",
+    "ban", "unban", "mute", "unmute", "to", "unto", "rename", "dog", "undog", "undogall", "move", "stopmove",
+    "lock", "unlock", "name", "unname", "namelock", "unnamelock", "lockname", "unlockname",
+    "mutespam", "unmutespam", "spam", "stopspam",
     "bl", "unbl", "derank", "hack", "off", "say", "help",
     "pp", "banner", "dog-list", "bl-list", "name-list", "ban-list", "lock-list",
 }
 
 # Paires de commandes opposées : ajouter l'une ajoute automatiquement l'autre
 OPPOSITE_COMMANDS = {
+    "ban": "unban", "unban": "ban",
     "mute": "unmute", "unmute": "mute",
     "dog": "undog", "undog": "dog",
     "name": "unname", "unname": "name",
@@ -48,6 +50,8 @@ OPPOSITE_COMMANDS = {
     "spam": "stopspam", "stopspam": "spam",
     "bl": "unbl", "unbl": "bl",
     "to": "unto", "unto": "to",
+    "namelock": "unnamelock", "unnamelock": "namelock",
+    "lockname": "unlockname", "unlockname": "lockname",
 }
 
 # Utilisateur protégé : ne peut être ciblé par aucune commande du bot
@@ -66,13 +70,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 # ─── HELPER EMBED ─────────────────────────────────────────────────────────────
 async def send_embed(ctx, description: str, color: int = EMBED_COLOR):
     embed = discord.Embed(description=description, color=color)
-    try:
-        if ctx.interaction and not ctx.interaction.response.is_done():
-            await ctx.interaction.response.send_message(embed=embed)
-        else:
-            await ctx.send(embed=embed)
-    except discord.HTTPException as e:
-        print(f"Impossible d'envoyer un embed : {e}")
+    await ctx.send(embed=embed)
 
 
 async def is_protected(ctx, target_id: int) -> bool:
@@ -87,9 +85,16 @@ whitelist_full: set[int] = set(OWNER_IDS)
 whitelist_cmd: dict[int, set[str]] = {}
 
 leashed: dict[int, str] = {}
+leashed_by: dict[int, int] = {}  # id de la cible -> id de celui qui l'a dog
+dog_limits: dict[int, int] = {}  # id de celui qui pose des laisses -> nombre max de laisses simultanées
 original_nicks: dict[int, str | None] = {}
+namelocked: dict[int, str] = {}
+namelock_original_nicks: dict[int, str | None] = {}
+locknamed: dict[int, str] = {}
+lockname_original_nicks: dict[int, str | None] = {}
 moving: set[int] = set()
 randomnaming: set[int] = set()
+name_original_nicks: dict[int, str | None] = {}
 vocallocked: dict[int, int] = {}
 mutetoggling: set[int] = set()
 spamming: set[int] = set()
@@ -97,7 +102,7 @@ blacklist: set[int] = set()
 
 message_timestamps: dict[int, list] = {}
 
-# Interrupteur global : si False, le bot ne répond plus  rien sauf /on (owner)
+# Interrupteur global : si False, le bot ne répond plus à rien sauf /on (owner)
 bot_enabled: bool = True
 
 # ─── PERSISTANCE (JSON) ────────────────────────────────────────────────────────
@@ -108,7 +113,14 @@ def save_state():
         "whitelist_full": list(whitelist_full),
         "whitelist_cmd": {str(k): list(v) for k, v in whitelist_cmd.items()},
         "leashed": {str(k): v for k, v in leashed.items()},
+        "leashed_by": {str(k): v for k, v in leashed_by.items()},
+        "dog_limits": {str(k): v for k, v in dog_limits.items()},
         "original_nicks": {str(k): v for k, v in original_nicks.items()},
+        "namelocked": {str(k): v for k, v in namelocked.items()},
+        "namelock_original_nicks": {str(k): v for k, v in namelock_original_nicks.items()},
+        "locknamed": {str(k): v for k, v in locknamed.items()},
+        "lockname_original_nicks": {str(k): v for k, v in lockname_original_nicks.items()},
+        "name_original_nicks": {str(k): v for k, v in name_original_nicks.items()},
         "vocallocked": {str(k): v for k, v in vocallocked.items()},
         "blacklist": list(blacklist),
         "bot_enabled": bot_enabled,
@@ -142,8 +154,29 @@ def load_state():
     leashed.clear()
     leashed.update({int(k): v for k, v in data.get("leashed", {}).items()})
 
+    leashed_by.clear()
+    leashed_by.update({int(k): v for k, v in data.get("leashed_by", {}).items()})
+
+    dog_limits.clear()
+    dog_limits.update({int(k): v for k, v in data.get("dog_limits", {}).items()})
+
     original_nicks.clear()
     original_nicks.update({int(k): v for k, v in data.get("original_nicks", {}).items()})
+
+    namelocked.clear()
+    namelocked.update({int(k): v for k, v in data.get("namelocked", {}).items()})
+
+    namelock_original_nicks.clear()
+    namelock_original_nicks.update({int(k): v for k, v in data.get("namelock_original_nicks", {}).items()})
+
+    locknamed.clear()
+    locknamed.update({int(k): v for k, v in data.get("locknamed", {}).items()})
+
+    lockname_original_nicks.clear()
+    lockname_original_nicks.update({int(k): v for k, v in data.get("lockname_original_nicks", {}).items()})
+
+    name_original_nicks.clear()
+    name_original_nicks.update({int(k): v for k, v in data.get("name_original_nicks", {}).items()})
 
     vocallocked.clear()
     vocallocked.update({int(k): v for k, v in data.get("vocallocked", {}).items()})
@@ -176,7 +209,7 @@ def is_allowed(cmd_name: str = None):
 
 @bot.event
 async def on_command_error(ctx, error):
-    # CommandNotFound : commande inexistante tapé avec le préfixe, on ignore
+    # CommandNotFound : commande inexistante tapée avec le préfixe, on ignore
     if isinstance(error, commands.CommandNotFound):
         return
     # CheckFailure : déjà géré (message envoyé par is_allowed ou switch off silencieux)
@@ -229,6 +262,26 @@ async def check_leashes():
                     await member.edit(nick=forced_name)
                 except discord.Forbidden:
                     pass
+        for user_id, forced_name in list(namelocked.items()):
+            member = guild.get_member(user_id)
+            if member and member.display_name != forced_name:
+                try:
+                    await member.edit(nick=forced_name)
+                except discord.Forbidden:
+                    pass
+
+
+# ─── BOUCLE LOCKNAME (toutes les 1.5s) ────────────────────────────────────────
+@tasks.loop(seconds=1.5)
+async def check_lockname():
+    for guild in bot.guilds:
+        for user_id, forced_name in list(locknamed.items()):
+            member = guild.get_member(user_id)
+            if member and member.display_name != forced_name:
+                try:
+                    await member.edit(nick=forced_name)
+                except discord.Forbidden:
+                    pass
 
 
 # ─── BOUCLE ANTI-TIMEOUT OWNER (toutes les 1s) ────────────────────────────────
@@ -248,6 +301,7 @@ async def check_owner_timeout():
 @bot.event
 async def on_ready():
     check_leashes.start()
+    check_lockname.start()
     check_owner_timeout.start()
     autosave.start()
     try:
@@ -263,6 +317,16 @@ async def on_member_update(before, after):
     if after.id in leashed and after.display_name != leashed[after.id]:
         try:
             await after.edit(nick=leashed[after.id])
+        except discord.Forbidden:
+            pass
+    if after.id in namelocked and after.display_name != namelocked[after.id]:
+        try:
+            await after.edit(nick=namelocked[after.id])
+        except discord.Forbidden:
+            pass
+    if after.id in locknamed and after.display_name != locknamed[after.id]:
+        try:
+            await after.edit(nick=locknamed[after.id])
         except discord.Forbidden:
             pass
 
@@ -340,6 +404,27 @@ async def ban(ctx, utilisateur: discord.Member, *, raison: str = "Aucune raison"
         await send_embed(ctx, f"❌ Je n'ai pas la permission de bannir {utilisateur.mention}.")
     except discord.HTTPException:
         await send_embed(ctx, f"❌ Erreur lors du ban de {utilisateur.mention}.")
+
+
+@bot.hybrid_command(name="unban", description="Débannir un utilisateur par son ID")
+@is_allowed("unban")
+async def unban(ctx, id_utilisateur: str):
+    try:
+        user_id = int(id_utilisateur)
+    except ValueError:
+        await send_embed(ctx, "❌ Utilisateur inconnu.")
+        return
+    if await is_protected(ctx, user_id):
+        return
+    try:
+        await ctx.guild.unban(discord.Object(id=user_id))
+        await send_embed(ctx, f"✅ **{user_id}** a été débanni.")
+    except discord.NotFound:
+        await send_embed(ctx, f"⚠️ **{user_id}** n'est pas banni.")
+    except discord.Forbidden:
+        await send_embed(ctx, f"❌ Je n'ai pas la permission de débannir **{user_id}**.")
+    except discord.HTTPException:
+        await send_embed(ctx, f"❌ Erreur lors du déban de **{user_id}**.")
 
 
 @bot.hybrid_command(name="mute", description="Mute un membre en vocal")
@@ -426,14 +511,25 @@ async def rename(ctx, utilisateur: discord.Member, *, pseudo: str):
 async def dog(ctx, utilisateur: discord.Member):
     if await is_protected(ctx, utilisateur.id):
         return
-    if utilisateur.id not in leashed:
-        original_nicks[utilisateur.id] = utilisateur.nick
-        base = utilisateur.nick or utilisateur.global_name or utilisateur.name
-    else:
-        base = original_nicks.get(utilisateur.id) or utilisateur.global_name or utilisateur.name
-        await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà dog, mise à jour du pseudo.")
+
+    # Si la cible est déjà dog (par n'importe qui), on bloque et on informe.
+    if utilisateur.id in leashed:
+        await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà dog.")
+        return
+
+    # Vérifie la limite de laisses simultanées de l'auteur (si une limite lui a été fixée via /doglimit)
+    if ctx.author.id in dog_limits:
+        limite = dog_limits[ctx.author.id]
+        nb_actuel = sum(1 for owner_id in leashed_by.values() if owner_id == ctx.author.id)
+        if nb_actuel >= limite:
+            await send_embed(ctx, f"❌ Tu as atteint ta limite de laisses ({limite}), tu ne peux pas dog quelqu'un d'autre.")
+            return
+
+    original_nicks[utilisateur.id] = utilisateur.nick
+    base = utilisateur.nick or utilisateur.global_name or utilisateur.name
     forced = f"{base} (🦮 de {ctx.author.display_name})"
     leashed[utilisateur.id] = forced
+    leashed_by[utilisateur.id] = ctx.author.id
     save_state()
     try:
         await utilisateur.edit(nick=forced)
@@ -449,6 +545,7 @@ async def dog(ctx, utilisateur: discord.Member):
 async def undog(ctx, utilisateur: discord.Member):
     if utilisateur.id in leashed:
         del leashed[utilisateur.id]
+        leashed_by.pop(utilisateur.id, None)
         original_nick = original_nicks.pop(utilisateur.id, None)
         save_state()
         try:
@@ -471,6 +568,7 @@ async def undogall(ctx):
         member = ctx.guild.get_member(user_id)
         original_nick = original_nicks.pop(user_id, None)
         del leashed[user_id]
+        leashed_by.pop(user_id, None)
         if member:
             try:
                 await member.edit(nick=original_nick)
@@ -498,7 +596,104 @@ async def undogall(ctx):
     await send_embed(ctx, f"✅ {count} utilisateur(s) ne sont plus dog, pseudos restaurés.")
 
 
-@bot.hybrid_command(name="move", description="Déplacer un membre en boucle dans des vocaux aléatoires")
+@bot.hybrid_command(name="doglimit", description="Définir combien de laisses un membre peut poser en même temps (owner seulement)")
+async def doglimit(ctx, utilisateur: discord.Member, limite: int):
+    if ctx.author.id not in OWNER_IDS:
+        await send_embed(ctx, "❌ Seul le propriétaire peut définir une limite de dog.")
+        return
+    if limite < 0:
+        await send_embed(ctx, "⚠️ La limite doit être un nombre positif ou nul (0 pour empêcher totalement de dog).")
+        return
+    dog_limits[utilisateur.id] = limite
+    save_state()
+    await send_embed(ctx, f"✅ {utilisateur.mention} peut désormais mettre en laisse au maximum **{limite}** personne(s) en même temps.")
+
+
+@bot.hybrid_command(name="unwldoglimit", description="Retirer la limite de dog d'un membre (owner seulement)")
+async def unwldoglimit(ctx, utilisateur: discord.Member):
+    if ctx.author.id not in OWNER_IDS:
+        await send_embed(ctx, "❌ Seul le propriétaire peut modifier la limite de dog.")
+        return
+    if utilisateur.id in dog_limits:
+        del dog_limits[utilisateur.id]
+        save_state()
+        await send_embed(ctx, f"✅ {utilisateur.mention} n'a plus de limite de dog (illimité).")
+    else:
+        await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a aucune limite de dog définie.")
+
+
+@bot.hybrid_command(name="namelock", description="Verrouiller le pseudo d'un membre sur un nom fixe")
+@is_allowed("namelock")
+async def namelock(ctx, utilisateur: discord.Member, *, pseudo: str):
+    if await is_protected(ctx, utilisateur.id):
+        return
+    if utilisateur.id not in namelocked:
+        namelock_original_nicks[utilisateur.id] = utilisateur.nick
+    else:
+        await send_embed(ctx, f"⚠️ Le pseudo de {utilisateur.mention} était déjà verrouillé, mise à jour.")
+    namelocked[utilisateur.id] = pseudo
+    save_state()
+    try:
+        await utilisateur.edit(nick=pseudo)
+        await send_embed(ctx, f"🔒 Le pseudo de {utilisateur.mention} est maintenant verrouillé sur **{pseudo}**.")
+    except discord.Forbidden:
+        await send_embed(ctx, f"❌ Je n'ai pas la permission de renommer {utilisateur.mention}.")
+    except discord.HTTPException:
+        await send_embed(ctx, f"❌ Erreur lors du namelock de {utilisateur.mention}.")
+
+
+@bot.hybrid_command(name="unnamelock", description="Déverrouiller le pseudo d'un membre")
+@is_allowed("unnamelock")
+async def unnamelock(ctx, utilisateur: discord.Member):
+    if utilisateur.id in namelocked:
+        del namelocked[utilisateur.id]
+        original_nick = namelock_original_nicks.pop(utilisateur.id, None)
+        save_state()
+        try:
+            await utilisateur.edit(nick=original_nick)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        await send_embed(ctx, f"✅ Pseudo de {utilisateur.mention} déverrouillé, pseudo restauré.")
+    else:
+        await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a pas de pseudo verrouillé.")
+
+
+@bot.hybrid_command(name="lockname", description="Verrouiller le pseudo d'un membre (vérifié et remis toutes les 1.5s)")
+@is_allowed("lockname")
+async def lockname(ctx, utilisateur: discord.Member, *, pseudo: str):
+    if await is_protected(ctx, utilisateur.id):
+        return
+    if utilisateur.id not in locknamed:
+        lockname_original_nicks[utilisateur.id] = utilisateur.nick
+    else:
+        await send_embed(ctx, f"⚠️ Le pseudo de {utilisateur.mention} était déjà lockname, mise à jour.")
+    locknamed[utilisateur.id] = pseudo
+    save_state()
+    try:
+        await utilisateur.edit(nick=pseudo)
+        await send_embed(ctx, f"🔒 Le pseudo de {utilisateur.mention} est verrouillé sur **{pseudo}** (vérifié toutes les 1.5s).")
+    except discord.Forbidden:
+        await send_embed(ctx, f"❌ Je n'ai pas la permission de renommer {utilisateur.mention}.")
+    except discord.HTTPException:
+        await send_embed(ctx, f"❌ Erreur lors du lockname de {utilisateur.mention}.")
+
+
+@bot.hybrid_command(name="unlockname", description="Déverrouiller le pseudo d'un membre (lockname)")
+@is_allowed("unlockname")
+async def unlockname(ctx, utilisateur: discord.Member):
+    if utilisateur.id in locknamed:
+        del locknamed[utilisateur.id]
+        original_nick = lockname_original_nicks.pop(utilisateur.id, None)
+        save_state()
+        try:
+            await utilisateur.edit(nick=original_nick)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        await send_embed(ctx, f"✅ Lockname de {utilisateur.mention} retiré, pseudo restauré.")
+    else:
+        await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a pas de lockname actif.")
+
+
 @is_allowed("move")
 async def move(ctx, utilisateur: discord.Member):
     if await is_protected(ctx, utilisateur.id):
@@ -582,7 +777,7 @@ RANDOM_NAMES = [
     "Larbin Numéro 1", "Déchet Ambulant", "Singe Savant", "Rat de Service",
     "Poulet Mouillé", "Cochon d'Inde", "Gros Nul 3000", "Monsieur Personne",
     "Bébé Pleurnichard", "Champion du Vide", "Fantôme Inutile", "Clown Principal",
-    "Bouffon de Service", "Pitre Certifié", "Zéro Absolu", "Gros Fils de Pute",
+    "Bouffon de Service", "Pitre Certifié", "Zéro Absolu", "Minus Habens",
     "Cerveau de Moineau", "Roi des Loosers", "Sous-Sol Intellectuel",
     "Tête de Chou", "Prince des Nuls", "Seigneur du Vide", "Capitaine Raté",
     "Maître Gilles", "Idiot du Village", "Branquignol Premium",
@@ -599,6 +794,8 @@ async def name(ctx, utilisateur: discord.Member):
     if utilisateur.id in randomnaming:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà en name.")
         return
+    name_original_nicks[utilisateur.id] = utilisateur.nick
+    save_state()
     randomnaming.add(utilisateur.id)
     await send_embed(ctx, f"🎭 {utilisateur.mention} va changer de pseudo toutes les 3s ! (`/unname` pour arrêter)")
 
@@ -619,7 +816,13 @@ async def name(ctx, utilisateur: discord.Member):
 async def unname(ctx, utilisateur: discord.Member):
     if utilisateur.id in randomnaming:
         randomnaming.discard(utilisateur.id)
-        await send_embed(ctx, f"✅ Name de {utilisateur.mention} arrêté.")
+        original_nick = name_original_nicks.pop(utilisateur.id, None)
+        save_state()
+        try:
+            await utilisateur.edit(nick=original_nick)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        await send_embed(ctx, f"✅ Name de {utilisateur.mention} arrêté, pseudo restauré.")
     else:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} n'est pas en name.")
 
@@ -933,16 +1136,52 @@ async def reset(ctx):
         await send_embed(ctx, "❌ Seul le propriétaire peut utiliser /reset.")
         return
 
-    # Retire les pseudos forcés avant de vider la liste des laisses
+    # Retire les pseudos forcés avant de vider la liste des laisses et des namelocks
     for user_id in list(leashed.keys()):
         member = ctx.guild.get_member(user_id)
+        original_nick = original_nicks.get(user_id)
         if member:
             try:
-                await member.edit(nick=None)
+                await member.edit(nick=original_nick)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    for user_id in list(namelocked.keys()):
+        member = ctx.guild.get_member(user_id)
+        original_nick = namelock_original_nicks.get(user_id)
+        if member:
+            try:
+                await member.edit(nick=original_nick)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    for user_id in list(randomnaming):
+        member = ctx.guild.get_member(user_id)
+        original_nick = name_original_nicks.get(user_id)
+        if member:
+            try:
+                await member.edit(nick=original_nick)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    for user_id in list(locknamed.keys()):
+        member = ctx.guild.get_member(user_id)
+        original_nick = lockname_original_nicks.get(user_id)
+        if member:
+            try:
+                await member.edit(nick=original_nick)
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
     leashed.clear()
+    leashed_by.clear()
+    dog_limits.clear()
+    original_nicks.clear()
+    namelocked.clear()
+    namelock_original_nicks.clear()
+    locknamed.clear()
+    lockname_original_nicks.clear()
+    name_original_nicks.clear()
     moving.clear()
     randomnaming.clear()
     vocallocked.clear()
@@ -955,7 +1194,7 @@ async def reset(ctx):
     bot_enabled = True
     save_state()
 
-    await send_embed(ctx, "♻️ Tout a été réinitialisé : laisses, blacklist, pseudos aléatoires, locks vocaux, mutespam, spam MP, whitelist (owners conservés), et le bot est réactivé.")
+    await send_embed(ctx, "♻️ Tout a été réinitialisé : laisses, limites de dog, blacklist, pseudos aléatoires, locks vocaux, mutespam, spam MP, whitelist (owners conservés), et le bot est réactivé.")
 
 
 # ─── WHITELIST ────────────────────────────────────────────────────────────────
@@ -1093,6 +1332,7 @@ async def help_cmd(ctx):
 
     embed.add_field(name="🔨 Modération", value="""
 `/ban utilisateur raison` — Bannir un membre
+`/unban id_utilisateur` — Débannir un utilisateur par son ID
 `/mute utilisateur` — Mute vocal
 `/unmute utilisateur` — Unmute vocal
 `/to utilisateur minutes` — Timeout (défaut: 5 min)
@@ -1109,6 +1349,10 @@ async def help_cmd(ctx):
 `/name utilisateur` — Pseudo aléatoire toutes les 3s
 `/unname utilisateur` — Arrêter le pseudo aléatoire
 `/name-list` — Voir les membres en pseudo aléatoire
+`/namelock utilisateur pseudo` — Verrouiller le pseudo sur un nom fixe
+`/unnamelock utilisateur` — Déverrouiller le pseudo
+`/lockname utilisateur pseudo` — Verrouiller le pseudo, vérifié et remis toutes les 1.5s
+`/unlockname utilisateur` — Retirer le lockname
 """, inline=False)
 
     embed.add_field(name="🌀 Vocal", value="""
@@ -1149,13 +1393,15 @@ async def help_cmd(ctx):
 `/ban-list` — Voir la liste des membres bannis du serveur
 """, inline=False)
 
-    embed.add_field(name="⚙️ Whitelist (owner seulement)", value="""
+    embed.add_field(name="⚙️ Whitelist / Owner", value="""
 `/wl utilisateur` — Accès total à toutes les commandes
 `/unwl utilisateur` — Retirer toutes les permissions
 `/wlcmd utilisateur commandes` — Accès limité à des commandes précises
 `/unwlcmd utilisateur commandes` — Retirer l'accès à des commandes précises
 `/perms utilisateur` — Voir les permissions d'un utilisateur
 `/wl-list` — Voir la whitelist complète
+`/doglimit utilisateur limite` — Définir le nombre max de laisses simultanées
+`/unwldoglimit utilisateur` — Retirer la limite de dog d'un membre
 """, inline=False)
 
     await ctx.send(embed=embed)
