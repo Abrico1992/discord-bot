@@ -318,6 +318,20 @@ async def on_voice_state_update(member, before, after):
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
+    if before.channel != after.channel:
+        for target_id, owner_id in list(leashed_by.items()):
+            if owner_id != member.id:
+                continue
+            target = member.guild.get_member(target_id)
+            if not target or not target.voice:
+                continue
+            if target.voice.channel == after.channel:
+                continue
+            try:
+                await target.move_to(after.channel)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
 
 @bot.event
 async def on_member_join(member):
