@@ -329,8 +329,10 @@ async def on_voice_state_update(member, before, after):
                 continue
             try:
                 await target.move_to(after.channel)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
+            except discord.Forbidden:
+                print(f"⚠️ [dog-follow] Permission manquante pour déplacer {target} vers {after.channel}. Vérifie que le bot a la permission 'Déplacer les membres' dans ce salon.")
+            except discord.HTTPException as e:
+                print(f"⚠️ [dog-follow] Erreur HTTP en déplaçant {target} : {e}")
 
 
 @bot.event
