@@ -64,7 +64,7 @@ DOG_SUFFIX_PATTERN = re.compile(r"\s*\(🦮 de [^)]*\)\s*$")
 
 # ─── SETUP ────────────────────────────────────────────────────────────────────
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+bot = commands.Bot(command_prefix=["!", "&"], intents=intents, help_command=None)
 
 # ─── HELPER EMBED ─────────────────────────────────────────────────────────────
 async def send_embed(ctx, description: str, color: int = EMBED_COLOR):
@@ -78,6 +78,20 @@ async def is_protected(ctx, target_id: int) -> bool:
         await send_embed(ctx, "🛡️ Cette action n'est pas autorisée sur cet utilisateur.")
         return True
     return False
+
+
+MENTION_PATTERN = re.compile(r"^<@!?(\d+)>$")
+
+
+def parse_target_id(text: str) -> int | None:
+    """Extrait un ID utilisateur depuis une mention <@id> ou un ID brut."""
+    text = text.strip()
+    m = MENTION_PATTERN.match(text)
+    if m:
+        return int(m.group(1))
+    if text.isdigit():
+        return int(text)
+    return None
 
 # ─── VARIABLES GLOBALES ───────────────────────────────────────────────────────
 whitelist_full: set[int] = set(OWNER_IDS)
@@ -399,25 +413,24 @@ async def ban(ctx, utilisateur: discord.Member, *, raison: str = "Aucune raison"
         await send_embed(ctx, f"❌ Erreur lors du ban de {utilisateur.mention}.")
 
 
-@bot.hybrid_command(name="unban", description="Débannir un utilisateur par son ID")
+@bot.hybrid_command(name="unban", description="Débannir un utilisateur (ID ou mention)")
 @is_allowed("unban")
-async def unban(ctx, id_utilisateur: str):
-    try:
-        user_id = int(id_utilisateur)
-    except ValueError:
+async def unban(ctx, cible: str):
+    user_id = parse_target_id(cible)
+    if user_id is None:
         await send_embed(ctx, "❌ Utilisateur inconnu.")
         return
     if await is_protected(ctx, user_id):
         return
     try:
         await ctx.guild.unban(discord.Object(id=user_id))
-        await send_embed(ctx, f"✅ **{user_id}** a été débanni.")
+        await send_embed(ctx, f"✅ <@{user_id}> a été débanni.")
     except discord.NotFound:
-        await send_embed(ctx, f"⚠️ **{user_id}** n'est pas banni.")
+        await send_embed(ctx, f"⚠️ <@{user_id}> n'est pas banni.")
     except discord.Forbidden:
-        await send_embed(ctx, f"❌ Je n'ai pas la permission de débannir **{user_id}**.")
+        await send_embed(ctx, f"❌ Je n'ai pas la permission de débannir <@{user_id}>.")
     except discord.HTTPException:
-        await send_embed(ctx, f"❌ Erreur lors du déban de **{user_id}**.")
+        await send_embed(ctx, f"❌ Erreur lors du déban de <@{user_id}>.")
 
 
 @bot.hybrid_command(name="mute", description="Mute un membre en vocal")
@@ -886,12 +899,11 @@ async def bl(ctx, utilisateur: discord.Member, *, raison: str = "Blacklisté"):
         await send_embed(ctx, f"❌ Erreur lors du ban de {utilisateur.mention}.")
 
 
-@bot.hybrid_command(name="unbl", description="Retirer un utilisateur de la blacklist et le débannir")
+@bot.hybrid_command(name="unbl", description="Retirer un utilisateur de la blacklist et le débannir (ID ou mention)")
 @is_allowed("unbl")
-async def unbl(ctx, id_utilisateur: str):
-    try:
-        user_id = int(id_utilisateur)
-    except ValueError:
+async def unbl(ctx, cible: str):
+    user_id = parse_target_id(cible)
+    if user_id is None:
         await send_embed(ctx, "❌ Utilisateur inconnu.")
         return
     if await is_protected(ctx, user_id):
@@ -908,13 +920,13 @@ async def unbl(ctx, id_utilisateur: str):
         save_state()
         try:
             await ctx.guild.unban(discord.Object(id=user_id))
-            await send_embed(ctx, f"✅ **{user_id}** retiré de la blacklist et débanni.")
+            await send_embed(ctx, f"✅ <@{user_id}> retiré de la blacklist et débanni.")
         except discord.Forbidden:
-            await send_embed(ctx, f"❌ Je n'ai pas la permission de débannir **{user_id}**.")
+            await send_embed(ctx, f"❌ Je n'ai pas la permission de débannir <@{user_id}>.")
         except discord.HTTPException:
-            await send_embed(ctx, f"❌ Erreur lors du déban de **{user_id}**.")
+            await send_embed(ctx, f"❌ Erreur lors du déban de <@{user_id}>.")
     else:
-        await send_embed(ctx, f"⚠️ L'utilisateur **{user_id}** n'est pas blacklisté.")
+        await send_embed(ctx, f"⚠️ <@{user_id}> n'est pas blacklisté.")
 
 
 # ─── DERANK ───────────────────────────────────────────────────────────────────
@@ -1285,7 +1297,7 @@ async def help_cmd(ctx):
 
     embed.add_field(name="🔨 Modération", value="""
 `/ban utilisateur raison` — Bannir un membre
-`/unban id_utilisateur` — Débannir un utilisateur par son ID
+`/unban cible` — Débannir un utilisateur (ID ou mention)
 `/mute utilisateur` — Mute vocal
 `/unmute utilisateur` — Unmute vocal
 `/to utilisateur minutes` — Timeout (défaut: 5 min)
@@ -1339,7 +1351,7 @@ async def help_cmd(ctx):
 
     embed.add_field(name="⛔ Blacklist", value="""
 `/bl utilisateur raison` — Blacklister et bannir définitivement
-`/unbl id_utilisateur` — Retirer de la blacklist et débannir
+`/unbl cible` — Retirer de la blacklist et débannir (ID ou mention)
 `/bl-list` — Voir la liste des blacklistés
 `/ban-list` — Voir la liste des membres bannis du serveur
 """, inline=False)
