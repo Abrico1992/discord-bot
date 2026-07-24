@@ -227,14 +227,23 @@ def is_allowed(cmd_name: str = None):
         if ctx.guild is None:
             await send_embed(ctx, "❌ Cette commande doit être utilisée dans un serveur.")
             return False
+
         gid = ctx.guild.id
         uid = ctx.author.id
+
+        # Les owners ont toujours tous les droits
+        if uid in OWNER_IDS:
+            return True
+
         if uid in gset(whitelist_full, gid):
             return True
+
         if cmd_name and uid in gdict(whitelist_cmd, gid) and cmd_name in whitelist_cmd[gid][uid]:
             return True
+
         await send_embed(ctx, "❌ Tu n'as pas la permission d'utiliser cette commande.")
         return False
+
     return commands.check(predicate)
 
 
