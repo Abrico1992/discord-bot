@@ -34,7 +34,7 @@ VALID_COMMANDS = {
     "ban", "unban", "mute", "unmute", "to", "unto", "rename", "dog", "undog", "undogall", "move", "stopmove",
     "lock", "unlock", "name", "unname", "lockname", "unlockname",
     "mutespam", "unmutespam", "spam", "stopspam",
-    "bl", "unbl", "derank", "hack", "off", "say", "help",
+    "bl", "unbl", "wet", "unwet", "derank", "hack", "off", "say", "help",
     "pp", "banner", "dog-list", "bl-list", "name-list", "ban-list", "lock-list",
 }
 
@@ -49,6 +49,7 @@ OPPOSITE_COMMANDS = {
     "mutespam": "unmutespam", "unmutespam": "mutespam",
     "spam": "stopspam", "stopspam": "spam",
     "bl": "unbl", "unbl": "bl",
+    "wet": "unwet", "unwet": "wet",
     "to": "unto", "unto": "to",
     "lockname": "unlockname", "unlockname": "lockname",
 }
@@ -93,47 +94,82 @@ def parse_target_id(text: str) -> int | None:
         return int(text)
     return None
 
-# ─── VARIABLES GLOBALES ───────────────────────────────────────────────────────
-whitelist_full: set[int] = set(OWNER_IDS)
-whitelist_cmd: dict[int, set[str]] = {}
 
-leashed: dict[int, str] = {}
-leashed_by: dict[int, int] = {}  # id de la cible -> id de celui qui l'a dog
-dog_limits: dict[int, int] = {}  # id de celui qui pose des laisses -> nombre max de laisses simultanées
-original_nicks: dict[int, str | None] = {}
-locknamed: dict[int, str] = {}
-lockname_original_nicks: dict[int, str | None] = {}
-moving: set[int] = set()
-randomnaming: set[int] = set()
-name_original_nicks: dict[int, str | None] = {}
-vocallocked: dict[int, int] = {}
-mutetoggling: set[int] = set()
-spamming: set[int] = set()
-blacklist: set[int] = set()
+# ─── HELPERS D'ÉTAT PAR SERVEUR ────────────────────────────────────────────────
+# Toutes les structures ci-dessous sont indexées par guild_id en première clé,
+# afin que chaque serveur où le bot est présent ait son propre état totalement
+# indépendant. Ces deux helpers créent automatiquement le sous-conteneur du
+# serveur s'il n'existe pas encore.
+def gset(store: dict, gid: int) -> set:
+    return store.setdefault(gid, set())
+
+
+def gdict(store: dict, gid: int) -> dict:
+    return store.setdefault(gid, {})
+
+
+# ─── VARIABLES GLOBALES (scopées par serveur : guild_id -> ...) ───────────────
+whitelist_full: dict[int, set[int]] = {}
+whitelist_cmd: dict[int, dict[int, set[str]]] = {}
+
+leashed: dict[int, dict[int, str]] = {}
+leashed_by: dict[int, dict[int, int]] = {}
+dog_limits: dict[int, dict[int, int]] = {}
+original_nicks: dict[int, dict[int, str | None]] = {}
+locknamed: dict[int, dict[int, str]] = {}
+lockname_original_nicks: dict[int, dict[int, str | None]] = {}
+moving: dict[int, set[int]] = {}
+randomnaming: dict[int, set[int]] = {}
+name_original_nicks: dict[int, dict[int, str | None]] = {}
+vocallocked: dict[int, dict[int, int]] = {}
+mutetoggling: dict[int, set[int]] = {}
+spamming: dict[int, set[int]] = {}
+blacklist: dict[int, set[int]] = {}
 
 message_timestamps: dict[int, list] = {}
 
-# Interrupteur global : si False, le bot ne répond plus à rien sauf /on (owner)
-bot_enabled: bool = True
+# Interrupteur par serveur : si False pour un serveur donné, le bot ne répond
+# plus à rien sur CE serveur, sauf /on (owner)
+bot_enabled: dict[int, bool] = {}
+
+
+def is_bot_enabled(gid: int) -> bool:
+    return bot_enabled.get(gid, True)
+
 
 # ─── PERSISTANCE (JSON) ────────────────────────────────────────────────────────
 STATE_FILE = "bot_state.json"
 
-def save_state():
-    data = {
-        "whitelist_full": list(whitelist_full),
-        "whitelist_cmd": {str(k): list(v) for k, v in whitelist_cmd.items()},
-        "leashed": {str(k): v for k, v in leashed.items()},
-        "leashed_by": {str(k): v for k, v in leashed_by.items()},
-        "dog_limits": {str(k): v for k, v in dog_limits.items()},
-        "original_nicks": {str(k): v for k, v in original_nicks.items()},
-        "locknamed": {str(k): v for k, v in locknamed.items()},
-        "lockname_original_nicks": {str(k): v for k, v in lockname_original_nicks.items()},
-        "name_original_nicks": {str(k): v for k, v in name_original_nicks.items()},
-        "vocallocked": {str(k): v for k, v in vocallocked.items()},
-        "blacklist": list(blacklist),
-        "bot_enabled": bot_enabled,
+
+def _serialize_guild(gid: int) -> dict:
+    return {
+        "whitelist_full": list(gset(whitelist_full, gid)),
+        "whitelist_cmd": {str(k): list(v) for k, v in gdict(whitelist_cmd, gid).items()},
+        "leashed": {str(k): v for k, v in gdict(leashed, gid).items()},
+        "leashed_by": {str(k): v for k, v in gdict(leashed_by, gid).items()},
+        "dog_limits": {str(k): v for k, v in gdict(dog_limits, gid).items()},
+        "original_nicks": {str(k): v for k, v in gdict(original_nicks, gid).items()},
+        "locknamed": {str(k): v for k, v in gdict(locknamed, gid).items()},
+        "lockname_original_nicks": {str(k): v for k, v in gdict(lockname_original_nicks, gid).items()},
+        "name_original_nicks": {str(k): v for k, v in gdict(name_original_nicks, gid).items()},
+        "vocallocked": {str(k): v for k, v in gdict(vocallocked, gid).items()},
+        "blacklist": list(gset(blacklist, gid)),
+        "bot_enabled": is_bot_enabled(gid),
     }
+
+
+def save_state():
+    # Rassemble l'ensemble des guild_id qui ont un état enregistré, sur
+    # n'importe laquelle des structures ci-dessus.
+    all_gids = set()
+    for store in (
+        whitelist_full, whitelist_cmd, leashed, leashed_by, dog_limits,
+        original_nicks, locknamed, lockname_original_nicks, name_original_nicks,
+        vocallocked, blacklist, bot_enabled,
+    ):
+        all_gids.update(store.keys())
+
+    data = {"guilds": {str(gid): _serialize_guild(gid) for gid in all_gids}}
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -142,7 +178,6 @@ def save_state():
 
 
 def load_state():
-    global bot_enabled
     if not os.path.exists(STATE_FILE):
         return
     try:
@@ -152,42 +187,31 @@ def load_state():
         print(f"⚠️ Impossible de charger l'état : {e}")
         return
 
-    whitelist_full.clear()
-    whitelist_full.update(data.get("whitelist_full", []))
-    whitelist_full.update(OWNER_IDS)  # sécurité : les owners sont toujours whitelistés
+    guilds_data = data.get("guilds")
+    if guilds_data is None:
+        # Ancien format (état global unique, avant le passage au multi-serveur) : ignoré.
+        print("⚠️ Ancien format d'état détecté (pré multi-serveur), état ignoré.")
+        return
 
-    whitelist_cmd.clear()
-    for k, v in data.get("whitelist_cmd", {}).items():
-        whitelist_cmd[int(k)] = set(v)
+    for gid_str, gdata in guilds_data.items():
+        gid = int(gid_str)
 
-    leashed.clear()
-    leashed.update({int(k): v for k, v in data.get("leashed", {}).items()})
+        whitelist_full[gid] = set(gdata.get("whitelist_full", [])) | (OWNER_IDS if gid in whitelist_full else set())
+        whitelist_full[gid] |= OWNER_IDS  # sécurité : les owners sont toujours whitelistés sur chaque serveur
 
-    leashed_by.clear()
-    leashed_by.update({int(k): v for k, v in data.get("leashed_by", {}).items()})
+        whitelist_cmd[gid] = {int(k): set(v) for k, v in gdata.get("whitelist_cmd", {}).items()}
 
-    dog_limits.clear()
-    dog_limits.update({int(k): v for k, v in data.get("dog_limits", {}).items()})
+        leashed[gid] = {int(k): v for k, v in gdata.get("leashed", {}).items()}
+        leashed_by[gid] = {int(k): v for k, v in gdata.get("leashed_by", {}).items()}
+        dog_limits[gid] = {int(k): v for k, v in gdata.get("dog_limits", {}).items()}
+        original_nicks[gid] = {int(k): v for k, v in gdata.get("original_nicks", {}).items()}
+        locknamed[gid] = {int(k): v for k, v in gdata.get("locknamed", {}).items()}
+        lockname_original_nicks[gid] = {int(k): v for k, v in gdata.get("lockname_original_nicks", {}).items()}
+        name_original_nicks[gid] = {int(k): v for k, v in gdata.get("name_original_nicks", {}).items()}
+        vocallocked[gid] = {int(k): v for k, v in gdata.get("vocallocked", {}).items()}
+        blacklist[gid] = set(gdata.get("blacklist", []))
+        bot_enabled[gid] = gdata.get("bot_enabled", True)
 
-    original_nicks.clear()
-    original_nicks.update({int(k): v for k, v in data.get("original_nicks", {}).items()})
-
-    locknamed.clear()
-    locknamed.update({int(k): v for k, v in data.get("locknamed", {}).items()})
-
-    lockname_original_nicks.clear()
-    lockname_original_nicks.update({int(k): v for k, v in data.get("lockname_original_nicks", {}).items()})
-
-    name_original_nicks.clear()
-    name_original_nicks.update({int(k): v for k, v in data.get("name_original_nicks", {}).items()})
-
-    vocallocked.clear()
-    vocallocked.update({int(k): v for k, v in data.get("vocallocked", {}).items()})
-
-    blacklist.clear()
-    blacklist.update(data.get("blacklist", []))
-
-    bot_enabled = data.get("bot_enabled", True)
     print("✅ État chargé depuis bot_state.json")
 
 
@@ -200,10 +224,14 @@ async def autosave():
 # ─── CHECK PERMISSION ─────────────────────────────────────────────────────────
 def is_allowed(cmd_name: str = None):
     async def predicate(ctx):
+        if ctx.guild is None:
+            await send_embed(ctx, "❌ Cette commande doit être utilisée dans un serveur.")
+            return False
+        gid = ctx.guild.id
         uid = ctx.author.id
-        if uid in whitelist_full:
+        if uid in gset(whitelist_full, gid):
             return True
-        if cmd_name and uid in whitelist_cmd and cmd_name in whitelist_cmd[uid]:
+        if cmd_name and uid in gdict(whitelist_cmd, gid) and cmd_name in whitelist_cmd[gid][uid]:
             return True
         await send_embed(ctx, "❌ Tu n'as pas la permission d'utiliser cette commande.")
         return False
@@ -246,10 +274,10 @@ async def prefix_owner_only(ctx):
 
 @bot.check
 async def global_off_switch(ctx):
-    # Quand le bot est off, seul /on (owner uniquement) passe
+    # Quand le bot est off SUR CE SERVEUR, seul /on (owner uniquement) passe
     if ctx.command and ctx.command.name == "on":
         return True
-    if not bot_enabled:
+    if ctx.guild and not is_bot_enabled(ctx.guild.id):
         return False
     return True
 
@@ -258,7 +286,7 @@ async def global_off_switch(ctx):
 @tasks.loop(seconds=5)
 async def check_leashes():
     for guild in bot.guilds:
-        for user_id, forced_name in list(leashed.items()):
+        for user_id, forced_name in list(gdict(leashed, guild.id).items()):
             member = guild.get_member(user_id)
             if member and member.display_name != forced_name:
                 try:
@@ -271,7 +299,7 @@ async def check_leashes():
 @tasks.loop(seconds=1.5)
 async def check_lockname():
     for guild in bot.guilds:
-        for user_id, forced_name in list(locknamed.items()):
+        for user_id, forced_name in list(gdict(locknamed, guild.id).items()):
             member = guild.get_member(user_id)
             if member and member.display_name != forced_name:
                 try:
@@ -310,22 +338,29 @@ async def on_ready():
 
 @bot.event
 async def on_member_update(before, after):
-    if after.id in leashed and after.display_name != leashed[after.id]:
+    gid = after.guild.id
+    g_leashed = gdict(leashed, gid)
+    g_locknamed = gdict(locknamed, gid)
+    if after.id in g_leashed and after.display_name != g_leashed[after.id]:
         try:
-            await after.edit(nick=leashed[after.id])
+            await after.edit(nick=g_leashed[after.id])
         except discord.Forbidden:
             pass
-    if after.id in locknamed and after.display_name != locknamed[after.id]:
+    if after.id in g_locknamed and after.display_name != g_locknamed[after.id]:
         try:
-            await after.edit(nick=locknamed[after.id])
+            await after.edit(nick=g_locknamed[after.id])
         except discord.Forbidden:
             pass
 
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    if member.id in vocallocked:
-        locked_channel = member.guild.get_channel(vocallocked[member.id])
+    gid = member.guild.id
+    g_vocallocked = gdict(vocallocked, gid)
+    g_leashed_by = gdict(leashed_by, gid)
+
+    if member.id in g_vocallocked:
+        locked_channel = member.guild.get_channel(g_vocallocked[member.id])
         if locked_channel and after.channel != locked_channel:
             try:
                 await member.move_to(locked_channel)
@@ -333,7 +368,7 @@ async def on_voice_state_update(member, before, after):
                 pass
 
     if before.channel != after.channel:
-        for target_id, owner_id in list(leashed_by.items()):
+        for target_id, owner_id in list(g_leashed_by.items()):
             if owner_id != member.id:
                 continue
             target = member.guild.get_member(target_id)
@@ -351,7 +386,7 @@ async def on_voice_state_update(member, before, after):
 
 @bot.event
 async def on_member_join(member):
-    if member.id in blacklist:
+    if member.id in gset(blacklist, member.guild.id):
         try:
             await member.ban(reason="Blacklisté automatiquement")
         except (discord.Forbidden, discord.HTTPException):
@@ -375,7 +410,7 @@ async def on_message(message):
     content = message.content.strip()
     content_lower = content.lower()
 
-    if bot_enabled:
+    if message.guild and is_bot_enabled(message.guild.id):
         if content_lower == "quoi" or content_lower.endswith("quoi") or content_lower.endswith("quoi?") or content_lower.endswith("quoi !") or content_lower.endswith("quoi!"):
             await message.channel.send("feur")
 
@@ -518,28 +553,35 @@ async def dog(ctx, utilisateur: discord.Member):
     if await is_protected(ctx, utilisateur.id):
         return
 
+    gid = ctx.guild.id
+    g_leashed = gdict(leashed, gid)
+    g_leashed_by = gdict(leashed_by, gid)
+    g_dog_limits = gdict(dog_limits, gid)
+    g_original_nicks = gdict(original_nicks, gid)
+    g_randomnaming = gset(randomnaming, gid)
+
     # Si la cible est déjà dog (par n'importe qui), on bloque et on informe.
-    if utilisateur.id in leashed:
+    if utilisateur.id in g_leashed:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà dog.")
         return
 
-    if utilisateur.id in randomnaming:
+    if utilisateur.id in g_randomnaming:
         await send_embed(ctx, f"❌ {utilisateur.mention} est déjà en name, impossible de le dog.")
         return
 
     # Vérifie la limite de laisses simultanées de l'auteur (si une limite lui a été fixée via /doglimit)
-    if ctx.author.id in dog_limits:
-        limite = dog_limits[ctx.author.id]
-        nb_actuel = sum(1 for owner_id in leashed_by.values() if owner_id == ctx.author.id)
+    if ctx.author.id in g_dog_limits:
+        limite = g_dog_limits[ctx.author.id]
+        nb_actuel = sum(1 for owner_id in g_leashed_by.values() if owner_id == ctx.author.id)
         if nb_actuel >= limite:
             await send_embed(ctx, f"❌ Tu as atteint ta limite de laisses ({limite}), tu ne peux pas dog quelqu'un d'autre.")
             return
 
-    original_nicks[utilisateur.id] = utilisateur.nick
+    g_original_nicks[utilisateur.id] = utilisateur.nick
     base = utilisateur.nick or utilisateur.global_name or utilisateur.name
     forced = f"{base} (🦮 de {ctx.author.display_name})"
-    leashed[utilisateur.id] = forced
-    leashed_by[utilisateur.id] = ctx.author.id
+    g_leashed[utilisateur.id] = forced
+    g_leashed_by[utilisateur.id] = ctx.author.id
     save_state()
     try:
         await utilisateur.edit(nick=forced)
@@ -553,10 +595,15 @@ async def dog(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="undog", description="Retirer la laisse d'un membre")
 @is_allowed("undog")
 async def undog(ctx, utilisateur: discord.Member):
-    if utilisateur.id in leashed:
-        del leashed[utilisateur.id]
-        leashed_by.pop(utilisateur.id, None)
-        original_nick = original_nicks.pop(utilisateur.id, None)
+    gid = ctx.guild.id
+    g_leashed = gdict(leashed, gid)
+    g_leashed_by = gdict(leashed_by, gid)
+    g_original_nicks = gdict(original_nicks, gid)
+
+    if utilisateur.id in g_leashed:
+        del g_leashed[utilisateur.id]
+        g_leashed_by.pop(utilisateur.id, None)
+        original_nick = g_original_nicks.pop(utilisateur.id, None)
         save_state()
         try:
             await utilisateur.edit(nick=original_nick)
@@ -570,15 +617,20 @@ async def undog(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="undogall", description="Retirer la laisse de tout le monde, y compris les pseudos (🦮 de ...) non suivis")
 @is_allowed("undogall")
 async def undogall(ctx):
-    processed_ids = set(leashed.keys())
+    gid = ctx.guild.id
+    g_leashed = gdict(leashed, gid)
+    g_leashed_by = gdict(leashed_by, gid)
+    g_original_nicks = gdict(original_nicks, gid)
+
+    processed_ids = set(g_leashed.keys())
     count = 0
 
     # 1. Utilisateurs suivis dans leashed : restauration précise du pseudo d'origine
-    for user_id in list(leashed.keys()):
+    for user_id in list(g_leashed.keys()):
         member = ctx.guild.get_member(user_id)
-        original_nick = original_nicks.pop(user_id, None)
-        del leashed[user_id]
-        leashed_by.pop(user_id, None)
+        original_nick = g_original_nicks.pop(user_id, None)
+        del g_leashed[user_id]
+        g_leashed_by.pop(user_id, None)
         if member:
             try:
                 await member.edit(nick=original_nick)
@@ -614,7 +666,7 @@ async def doglimit(ctx, utilisateur: discord.Member, limite: int):
     if limite < 0:
         await send_embed(ctx, "⚠️ La limite doit être un nombre positif ou nul (0 pour empêcher totalement de dog).")
         return
-    dog_limits[utilisateur.id] = limite
+    gdict(dog_limits, ctx.guild.id)[utilisateur.id] = limite
     save_state()
     await send_embed(ctx, f"✅ {utilisateur.mention} peut désormais mettre en laisse au maximum **{limite}** personne(s) en même temps.")
 
@@ -624,8 +676,9 @@ async def unwldoglimit(ctx, utilisateur: discord.Member):
     if ctx.author.id not in OWNER_IDS:
         await send_embed(ctx, "❌ Seul le propriétaire peut modifier la limite de dog.")
         return
-    if utilisateur.id in dog_limits:
-        del dog_limits[utilisateur.id]
+    g_dog_limits = gdict(dog_limits, ctx.guild.id)
+    if utilisateur.id in g_dog_limits:
+        del g_dog_limits[utilisateur.id]
         save_state()
         await send_embed(ctx, f"✅ {utilisateur.mention} n'a plus de limite de dog (illimité).")
     else:
@@ -637,11 +690,15 @@ async def unwldoglimit(ctx, utilisateur: discord.Member):
 async def lockname(ctx, utilisateur: discord.Member, *, pseudo: str):
     if await is_protected(ctx, utilisateur.id):
         return
-    if utilisateur.id not in locknamed:
-        lockname_original_nicks[utilisateur.id] = utilisateur.nick
+    gid = ctx.guild.id
+    g_locknamed = gdict(locknamed, gid)
+    g_lockname_original_nicks = gdict(lockname_original_nicks, gid)
+
+    if utilisateur.id not in g_locknamed:
+        g_lockname_original_nicks[utilisateur.id] = utilisateur.nick
     else:
         await send_embed(ctx, f"⚠️ Le pseudo de {utilisateur.mention} était déjà lockname, mise à jour.")
-    locknamed[utilisateur.id] = pseudo
+    g_locknamed[utilisateur.id] = pseudo
     save_state()
     try:
         await utilisateur.edit(nick=pseudo)
@@ -655,9 +712,13 @@ async def lockname(ctx, utilisateur: discord.Member, *, pseudo: str):
 @bot.hybrid_command(name="unlockname", description="Déverrouiller le pseudo d'un membre (lockname)")
 @is_allowed("unlockname")
 async def unlockname(ctx, utilisateur: discord.Member):
-    if utilisateur.id in locknamed:
-        del locknamed[utilisateur.id]
-        original_nick = lockname_original_nicks.pop(utilisateur.id, None)
+    gid = ctx.guild.id
+    g_locknamed = gdict(locknamed, gid)
+    g_lockname_original_nicks = gdict(lockname_original_nicks, gid)
+
+    if utilisateur.id in g_locknamed:
+        del g_locknamed[utilisateur.id]
+        original_nick = g_lockname_original_nicks.pop(utilisateur.id, None)
         save_state()
         try:
             await utilisateur.edit(nick=original_nick)
@@ -668,25 +729,29 @@ async def unlockname(ctx, utilisateur: discord.Member):
         await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a pas de lockname actif.")
 
 
+@bot.hybrid_command(name="move", description="Déplacer un membre en boucle dans des vocaux aléatoires")
 @is_allowed("move")
 async def move(ctx, utilisateur: discord.Member):
     if await is_protected(ctx, utilisateur.id):
         return
+    gid = ctx.guild.id
+    g_moving = gset(moving, gid)
+
     voice_channels = [c for c in ctx.guild.channels if isinstance(c, discord.VoiceChannel)]
     if len(voice_channels) < 2:
         await send_embed(ctx, "⚠️ Pas assez de salons vocaux.")
         return
-    if utilisateur.id in moving:
+    if utilisateur.id in g_moving:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà en cours de déplacement.")
         return
     if not utilisateur.voice:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} n'est pas dans un salon vocal.")
         return
-    moving.add(utilisateur.id)
+    g_moving.add(utilisateur.id)
     await send_embed(ctx, f"🌀 {utilisateur.mention} va être déplacé en boucle ! (`/stopmove` pour arrêter)")
 
     async def loop_move():
-        while utilisateur.id in moving:
+        while utilisateur.id in g_moving:
             if utilisateur.voice:
                 channel = random.choice(voice_channels)
                 try:
@@ -701,8 +766,9 @@ async def move(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="stopmove", description="Arrêter le déplacement en boucle d'un membre")
 @is_allowed("stopmove")
 async def stopmove(ctx, utilisateur: discord.Member):
-    if utilisateur.id in moving:
-        moving.discard(utilisateur.id)
+    g_moving = gset(moving, ctx.guild.id)
+    if utilisateur.id in g_moving:
+        g_moving.discard(utilisateur.id)
         await send_embed(ctx, f"✅ Déplacement de {utilisateur.mention} arrêté.")
     else:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} n'est pas en cours de déplacement.")
@@ -722,9 +788,10 @@ async def lock(ctx, utilisateur: discord.Member, id_salon: str):
     if not channel or not isinstance(channel, discord.VoiceChannel):
         await send_embed(ctx, "⚠️ ID de salon vocal invalide.")
         return
-    if utilisateur.id in vocallocked:
+    g_vocallocked = gdict(vocallocked, ctx.guild.id)
+    if utilisateur.id in g_vocallocked:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà lock, mise à jour du salon.")
-    vocallocked[utilisateur.id] = channel.id
+    g_vocallocked[utilisateur.id] = channel.id
     save_state()
     try:
         await utilisateur.move_to(channel)
@@ -738,8 +805,9 @@ async def lock(ctx, utilisateur: discord.Member, id_salon: str):
 @bot.hybrid_command(name="unlock", description="Débloquer un membre d'un salon vocal")
 @is_allowed("unlock")
 async def unlock(ctx, utilisateur: discord.Member):
-    if utilisateur.id in vocallocked:
-        del vocallocked[utilisateur.id]
+    g_vocallocked = gdict(vocallocked, ctx.guild.id)
+    if utilisateur.id in g_vocallocked:
+        del g_vocallocked[utilisateur.id]
         save_state()
         await send_embed(ctx, f"🔓 {utilisateur.mention} n'est plus attaché à un vocal.")
     else:
@@ -765,19 +833,24 @@ RANDOM_NAMES = [
 async def name(ctx, utilisateur: discord.Member):
     if await is_protected(ctx, utilisateur.id):
         return
-    if utilisateur.id in randomnaming:
+    gid = ctx.guild.id
+    g_randomnaming = gset(randomnaming, gid)
+    g_leashed = gdict(leashed, gid)
+    g_name_original_nicks = gdict(name_original_nicks, gid)
+
+    if utilisateur.id in g_randomnaming:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà en name.")
         return
-    if utilisateur.id in leashed:
+    if utilisateur.id in g_leashed:
         await send_embed(ctx, f"❌ {utilisateur.mention} est déjà dog, impossible de le mettre en name.")
         return
-    name_original_nicks[utilisateur.id] = utilisateur.nick
+    g_name_original_nicks[utilisateur.id] = utilisateur.nick
     save_state()
-    randomnaming.add(utilisateur.id)
+    g_randomnaming.add(utilisateur.id)
     await send_embed(ctx, f"🎭 {utilisateur.mention} va changer de pseudo toutes les 3s ! (`/unname` pour arrêter)")
 
     async def loop_rename():
-        while utilisateur.id in randomnaming:
+        while utilisateur.id in g_randomnaming:
             rname = random.choice(RANDOM_NAMES)
             try:
                 await utilisateur.edit(nick=rname)
@@ -791,9 +864,13 @@ async def name(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="unname", description="Arrêter le changement de pseudo aléatoire")
 @is_allowed("unname")
 async def unname(ctx, utilisateur: discord.Member):
-    if utilisateur.id in randomnaming:
-        randomnaming.discard(utilisateur.id)
-        original_nick = name_original_nicks.pop(utilisateur.id, None)
+    gid = ctx.guild.id
+    g_randomnaming = gset(randomnaming, gid)
+    g_name_original_nicks = gdict(name_original_nicks, gid)
+
+    if utilisateur.id in g_randomnaming:
+        g_randomnaming.discard(utilisateur.id)
+        original_nick = g_name_original_nicks.pop(utilisateur.id, None)
         save_state()
         try:
             await utilisateur.edit(nick=original_nick)
@@ -810,18 +887,19 @@ async def unname(ctx, utilisateur: discord.Member):
 async def mutespam(ctx, utilisateur: discord.Member):
     if await is_protected(ctx, utilisateur.id):
         return
-    if utilisateur.id in mutetoggling:
+    g_mutetoggling = gset(mutetoggling, ctx.guild.id)
+    if utilisateur.id in g_mutetoggling:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà en mutespam.")
         return
     if not utilisateur.voice:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} n'est pas dans un salon vocal.")
         return
-    mutetoggling.add(utilisateur.id)
+    g_mutetoggling.add(utilisateur.id)
     await send_embed(ctx, f"🔇🔊 {utilisateur.mention} va être mute/unmute en boucle ! (`/unmutespam` pour arrêter)")
 
     async def loop_mutetoggle():
         muted = False
-        while utilisateur.id in mutetoggling:
+        while utilisateur.id in g_mutetoggling:
             try:
                 muted = not muted
                 await utilisateur.edit(mute=muted)
@@ -839,8 +917,9 @@ async def mutespam(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="unmutespam", description="Arrêter le mutespam d'un membre")
 @is_allowed("unmutespam")
 async def unmutespam(ctx, utilisateur: discord.Member):
-    if utilisateur.id in mutetoggling:
-        mutetoggling.discard(utilisateur.id)
+    g_mutetoggling = gset(mutetoggling, ctx.guild.id)
+    if utilisateur.id in g_mutetoggling:
+        g_mutetoggling.discard(utilisateur.id)
         await send_embed(ctx, f"✅ Mutespam de {utilisateur.mention} arrêté.")
     else:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} n'est pas en mutespam.")
@@ -852,14 +931,15 @@ async def unmutespam(ctx, utilisateur: discord.Member):
 async def spam(ctx, utilisateur: discord.Member, *, message: str):
     if await is_protected(ctx, utilisateur.id):
         return
-    if utilisateur.id in spamming:
+    g_spamming = gset(spamming, ctx.guild.id)
+    if utilisateur.id in g_spamming:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà en spam MP.")
         return
-    spamming.add(utilisateur.id)
+    g_spamming.add(utilisateur.id)
     await send_embed(ctx, f"📩 Spam MP lancé sur {utilisateur.mention} ! (`/stopspam` pour arrêter)")
 
     async def loop_spam():
-        while utilisateur.id in spamming:
+        while utilisateur.id in g_spamming:
             try:
                 await utilisateur.send(message)
             except (discord.Forbidden, discord.HTTPException):
@@ -872,8 +952,9 @@ async def spam(ctx, utilisateur: discord.Member, *, message: str):
 @bot.hybrid_command(name="stopspam", description="Arrêter le spam MP d'un membre")
 @is_allowed("stopspam")
 async def stopspam(ctx, utilisateur: discord.Member):
-    if utilisateur.id in spamming:
-        spamming.discard(utilisateur.id)
+    g_spamming = gset(spamming, ctx.guild.id)
+    if utilisateur.id in g_spamming:
+        g_spamming.discard(utilisateur.id)
         await send_embed(ctx, f"✅ Spam MP de {utilisateur.mention} arrêté.")
     else:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} n'est pas en spam MP.")
@@ -885,10 +966,11 @@ async def stopspam(ctx, utilisateur: discord.Member):
 async def bl(ctx, utilisateur: discord.Member, *, raison: str = "Blacklisté"):
     if await is_protected(ctx, utilisateur.id):
         return
-    if utilisateur.id in blacklist:
+    g_blacklist = gset(blacklist, ctx.guild.id)
+    if utilisateur.id in g_blacklist:
         await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà blacklisté.")
         return
-    blacklist.add(utilisateur.id)
+    g_blacklist.add(utilisateur.id)
     save_state()
     try:
         await utilisateur.ban(reason=raison)
@@ -915,8 +997,61 @@ async def unbl(ctx, cible: str):
         return
     except discord.HTTPException:
         pass
-    if user_id in blacklist:
-        blacklist.discard(user_id)
+    g_blacklist = gset(blacklist, ctx.guild.id)
+    if user_id in g_blacklist:
+        g_blacklist.discard(user_id)
+        save_state()
+        try:
+            await ctx.guild.unban(discord.Object(id=user_id))
+            await send_embed(ctx, f"✅ <@{user_id}> retiré de la blacklist et débanni.")
+        except discord.Forbidden:
+            await send_embed(ctx, f"❌ Je n'ai pas la permission de débannir <@{user_id}>.")
+        except discord.HTTPException:
+            await send_embed(ctx, f"❌ Erreur lors du déban de <@{user_id}>.")
+    else:
+        await send_embed(ctx, f"⚠️ <@{user_id}> n'est pas blacklisté.")
+
+
+# ─── WET (identique à /bl) ─────────────────────────────────────────────────────
+@bot.hybrid_command(name="wet", description="Blacklister et bannir définitivement un membre")
+@is_allowed("wet")
+async def wet(ctx, utilisateur: discord.Member, *, raison: str = "Blacklisté"):
+    if await is_protected(ctx, utilisateur.id):
+        return
+    g_blacklist = gset(blacklist, ctx.guild.id)
+    if utilisateur.id in g_blacklist:
+        await send_embed(ctx, f"⚠️ {utilisateur.mention} est déjà blacklisté.")
+        return
+    g_blacklist.add(utilisateur.id)
+    save_state()
+    try:
+        await utilisateur.ban(reason=raison)
+        await send_embed(ctx, f"⛔ {utilisateur.mention} a été blacklisté et banni définitivement.")
+    except discord.Forbidden:
+        await send_embed(ctx, f"❌ Je n'ai pas la permission de bannir {utilisateur.mention}.")
+    except discord.HTTPException:
+        await send_embed(ctx, f"❌ Erreur lors du ban de {utilisateur.mention}.")
+
+
+@bot.hybrid_command(name="unwet", description="Retirer un utilisateur de la blacklist et le débannir (ID ou mention)")
+@is_allowed("unwet")
+async def unwet(ctx, cible: str):
+    user_id = parse_target_id(cible)
+    if user_id is None:
+        await send_embed(ctx, "❌ Utilisateur inconnu.")
+        return
+    if await is_protected(ctx, user_id):
+        return
+    try:
+        await bot.fetch_user(user_id)
+    except discord.NotFound:
+        await send_embed(ctx, "❌ Utilisateur inconnu.")
+        return
+    except discord.HTTPException:
+        pass
+    g_blacklist = gset(blacklist, ctx.guild.id)
+    if user_id in g_blacklist:
+        g_blacklist.discard(user_id)
         save_state()
         try:
             await ctx.guild.unban(discord.Object(id=user_id))
@@ -973,11 +1108,12 @@ async def banner(ctx, utilisateur: discord.Member):
 @bot.hybrid_command(name="dog-list", description="Voir la liste des membres actuellement en laisse")
 @is_allowed("dog-list")
 async def dog_list(ctx):
-    if not leashed:
+    g_leashed = gdict(leashed, ctx.guild.id)
+    if not g_leashed:
         await send_embed(ctx, "📋 Personne n'est actuellement dog.")
         return
     lignes = []
-    for user_id, forced_name in leashed.items():
+    for user_id, forced_name in g_leashed.items():
         lignes.append(f"• <@{user_id}> → `{forced_name}`")
     await send_embed(ctx, "🦮 **Membres en laisse :**\n" + "\n".join(lignes))
 
@@ -985,21 +1121,23 @@ async def dog_list(ctx):
 @bot.hybrid_command(name="bl-list", description="Voir la liste des utilisateurs blacklistés")
 @is_allowed("bl-list")
 async def bl_list(ctx):
-    if not blacklist:
+    g_blacklist = gset(blacklist, ctx.guild.id)
+    if not g_blacklist:
         await send_embed(ctx, "📋 La blacklist est vide.")
         return
-    lignes = [f"• <@{uid}>" for uid in blacklist]
+    lignes = [f"• <@{uid}>" for uid in g_blacklist]
     await send_embed(ctx, "⛔ **Utilisateurs blacklistés :**\n" + "\n".join(lignes))
 
 
 @bot.hybrid_command(name="name-list", description="Voir la liste des membres en pseudo aléatoire")
 @is_allowed("name-list")
 async def name_list(ctx):
-    if not randomnaming:
+    g_randomnaming = gset(randomnaming, ctx.guild.id)
+    if not g_randomnaming:
         await send_embed(ctx, "📋 Personne n'est actuellement en name.")
         return
     lignes = []
-    for user_id in randomnaming:
+    for user_id in g_randomnaming:
         lignes.append(f"• <@{user_id}>")
     await send_embed(ctx, "🎭 **Membres en pseudo aléatoire :**\n" + "\n".join(lignes))
 
@@ -1018,11 +1156,12 @@ async def ban_list(ctx):
 @bot.hybrid_command(name="lock-list", description="Voir la liste des membres lock en vocal")
 @is_allowed("lock-list")
 async def lock_list(ctx):
-    if not vocallocked:
+    g_vocallocked = gdict(vocallocked, ctx.guild.id)
+    if not g_vocallocked:
         await send_embed(ctx, "📋 Personne n'est actuellement lock.")
         return
     lignes = []
-    for user_id, channel_id in vocallocked.items():
+    for user_id, channel_id in g_vocallocked.items():
         channel = ctx.guild.get_channel(channel_id)
         lignes.append(f"• <@{user_id}> → {channel.name if channel else channel_id}")
     await send_embed(ctx, "🔒 **Membres lock en vocal :**\n" + "\n".join(lignes))
@@ -1033,14 +1172,17 @@ async def wl_list(ctx):
     if ctx.author.id not in OWNER_IDS:
         await send_embed(ctx, "❌ Seul le propriétaire peut voir la whitelist.")
         return
+    gid = ctx.guild.id
+    g_whitelist_full = gset(whitelist_full, gid)
+    g_whitelist_cmd = gdict(whitelist_cmd, gid)
     lignes = []
-    if whitelist_full:
-        lignes.append("🔓 **Accès total :** " + ", ".join(f"<@{uid}>" for uid in whitelist_full))
-    for uid, cmds in whitelist_cmd.items():
+    if g_whitelist_full:
+        lignes.append("🔓 **Accès total :** " + ", ".join(f"<@{uid}>" for uid in g_whitelist_full))
+    for uid, cmds in g_whitelist_cmd.items():
         liste = ", ".join(f"`/{c}`" for c in cmds)
         lignes.append(f"🔑 <@{uid}> → {liste}")
     if not lignes:
-        await send_embed(ctx, "📋 La whitelist est vide.")
+        await send_embed(ctx, "📋 La whitelist est vide sur ce serveur.")
         return
     await send_embed(ctx, "\n".join(lignes))
 
@@ -1076,24 +1218,22 @@ async def hack(ctx, utilisateur: discord.Member):
 
 
 # ─── OFF / ON ─────────────────────────────────────────────────────────────────
-@bot.hybrid_command(name="off", description="Désactive le bot entièrement (sauf /on)")
+@bot.hybrid_command(name="off", description="Désactive le bot entièrement sur ce serveur (sauf /on)")
 @is_allowed("off")
 async def off(ctx):
-    global bot_enabled
-    bot_enabled = False
+    bot_enabled[ctx.guild.id] = False
     save_state()
-    await send_embed(ctx, "🔴 Bot désactivé. Seul `/on` (owner) peut le réactiver.")
+    await send_embed(ctx, "🔴 Bot désactivé sur ce serveur. Seul `/on` (owner) peut le réactiver ici.")
 
 
-@bot.hybrid_command(name="on", description="Réactive le bot (owner uniquement)")
+@bot.hybrid_command(name="on", description="Réactive le bot sur ce serveur (owner uniquement)")
 async def on(ctx):
-    global bot_enabled
     if ctx.author.id not in OWNER_IDS:
         await send_embed(ctx, "❌ Seul le propriétaire peut réactiver le bot.")
         return
-    bot_enabled = True
+    bot_enabled[ctx.guild.id] = True
     save_state()
-    await send_embed(ctx, "🟢 Bot réactivé.")
+    await send_embed(ctx, "🟢 Bot réactivé sur ce serveur.")
 
 
 # ─── SAY ──────────────────────────────────────────────────────────────────────
@@ -1105,79 +1245,88 @@ async def say(ctx, *, message: str):
     await ctx.channel.send(message)
 
 
-@bot.hybrid_command(name="reset", description="Réinitialise tous les états du bot (owner seulement)")
+@bot.hybrid_command(name="reset", description="Réinitialise tous les états du bot sur ce serveur (owner seulement)")
 async def reset(ctx):
-    global bot_enabled
     if ctx.author.id not in OWNER_IDS:
         await send_embed(ctx, "❌ Seul le propriétaire peut utiliser /reset.")
         return
 
+    gid = ctx.guild.id
+    g_leashed = gdict(leashed, gid)
+    g_original_nicks = gdict(original_nicks, gid)
+    g_randomnaming = gset(randomnaming, gid)
+    g_name_original_nicks = gdict(name_original_nicks, gid)
+    g_locknamed = gdict(locknamed, gid)
+    g_lockname_original_nicks = gdict(lockname_original_nicks, gid)
+
     # Retire les pseudos forcés avant de vider la liste des laisses
-    for user_id in list(leashed.keys()):
+    for user_id in list(g_leashed.keys()):
         member = ctx.guild.get_member(user_id)
-        original_nick = original_nicks.get(user_id)
+        original_nick = g_original_nicks.get(user_id)
         if member:
             try:
                 await member.edit(nick=original_nick)
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-    for user_id in list(randomnaming):
+    for user_id in list(g_randomnaming):
         member = ctx.guild.get_member(user_id)
-        original_nick = name_original_nicks.get(user_id)
+        original_nick = g_name_original_nicks.get(user_id)
         if member:
             try:
                 await member.edit(nick=original_nick)
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-    for user_id in list(locknamed.keys()):
+    for user_id in list(g_locknamed.keys()):
         member = ctx.guild.get_member(user_id)
-        original_nick = lockname_original_nicks.get(user_id)
+        original_nick = g_lockname_original_nicks.get(user_id)
         if member:
             try:
                 await member.edit(nick=original_nick)
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-    leashed.clear()
-    leashed_by.clear()
-    dog_limits.clear()
-    original_nicks.clear()
-    locknamed.clear()
-    lockname_original_nicks.clear()
-    name_original_nicks.clear()
-    moving.clear()
-    randomnaming.clear()
-    vocallocked.clear()
-    mutetoggling.clear()
-    spamming.clear()
-    blacklist.clear()
-    whitelist_cmd.clear()
-    whitelist_full.clear()
-    whitelist_full.update(OWNER_IDS)
-    bot_enabled = True
+    leashed[gid] = {}
+    leashed_by[gid] = {}
+    dog_limits[gid] = {}
+    original_nicks[gid] = {}
+    locknamed[gid] = {}
+    lockname_original_nicks[gid] = {}
+    name_original_nicks[gid] = {}
+    moving[gid] = set()
+    randomnaming[gid] = set()
+    vocallocked[gid] = {}
+    mutetoggling[gid] = set()
+    spamming[gid] = set()
+    blacklist[gid] = set()
+    whitelist_cmd[gid] = {}
+    whitelist_full[gid] = set(OWNER_IDS)
+    bot_enabled[gid] = True
     save_state()
 
-    await send_embed(ctx, "♻️ Tout a été réinitialisé : laisses, limites de dog, blacklist, pseudos aléatoires, locks vocaux, mutespam, spam MP, whitelist (owners conservés), et le bot est réactivé.")
+    await send_embed(ctx, "♻️ Tout a été réinitialisé sur ce serveur : laisses, limites de dog, blacklist, pseudos aléatoires, locks vocaux, mutespam, spam MP, whitelist (owners conservés), et le bot est réactivé.")
 
 
 # ─── WHITELIST ────────────────────────────────────────────────────────────────
-@bot.hybrid_command(name="wl", description="Donner un accès total à un membre (owner seulement)")
+@bot.hybrid_command(name="wl", description="Donner un accès total à un membre sur ce serveur (owner seulement)")
 async def wl(ctx, utilisateur: discord.Member):
     if ctx.author.id not in OWNER_IDS:
         await send_embed(ctx, "❌ Seul le propriétaire peut modifier la whitelist.")
         return
-    if utilisateur.id in whitelist_full:
-        await send_embed(ctx, f"⚠️ {utilisateur.mention} a déjà un accès total.")
+    gid = ctx.guild.id
+    g_whitelist_full = gset(whitelist_full, gid)
+    g_whitelist_cmd = gdict(whitelist_cmd, gid)
+    if utilisateur.id in g_whitelist_full:
+        await send_embed(ctx, f"⚠️ {utilisateur.mention} a déjà un accès total sur ce serveur.")
         return
-    whitelist_full.add(utilisateur.id)
-    whitelist_cmd.pop(utilisateur.id, None)
+    g_whitelist_full.add(utilisateur.id)
+    g_whitelist_cmd.pop(utilisateur.id, None)
     save_state()
-    await send_embed(ctx, f"✅ {utilisateur.mention} a maintenant accès à toutes les commandes.")
+    await send_embed(ctx, f"✅ {utilisateur.mention} a maintenant accès à toutes les commandes sur ce serveur.")
 
 
-@bot.hybrid_command(name="unwl", description="Retirer toutes les permissions d'un membre (owner seulement)")
+@bot.hybrid_command(name="unwl", description="Retirer toutes les permissions d'un membre sur ce serveur (owner seulement)")
 async def unwl(ctx, utilisateur: discord.Member):
     if ctx.author.id not in OWNER_IDS:
         await send_embed(ctx, "❌ Seul le propriétaire peut modifier la whitelist.")
@@ -1185,22 +1334,29 @@ async def unwl(ctx, utilisateur: discord.Member):
     if utilisateur.id in OWNER_IDS:
         await send_embed(ctx, "❌ Impossible de retirer le propriétaire.")
         return
-    if utilisateur.id not in whitelist_full and utilisateur.id not in whitelist_cmd:
-        await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a aucune permission.")
+    gid = ctx.guild.id
+    g_whitelist_full = gset(whitelist_full, gid)
+    g_whitelist_cmd = gdict(whitelist_cmd, gid)
+    if utilisateur.id not in g_whitelist_full and utilisateur.id not in g_whitelist_cmd:
+        await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a aucune permission sur ce serveur.")
         return
-    whitelist_full.discard(utilisateur.id)
-    whitelist_cmd.pop(utilisateur.id, None)
+    g_whitelist_full.discard(utilisateur.id)
+    g_whitelist_cmd.pop(utilisateur.id, None)
     save_state()
-    await send_embed(ctx, f"✅ Toutes les permissions de {utilisateur.mention} ont été retirées.")
+    await send_embed(ctx, f"✅ Toutes les permissions de {utilisateur.mention} sur ce serveur ont été retirées.")
 
 
-@bot.hybrid_command(name="wlcmd", description="Donner accès à des commandes précises (owner seulement)")
+@bot.hybrid_command(name="wlcmd", description="Donner accès à des commandes précises sur ce serveur (owner seulement)")
 async def wlcmd(ctx, utilisateur: discord.Member, *, commandes: str):
     if ctx.author.id not in OWNER_IDS:
         await send_embed(ctx, "❌ Seul le propriétaire peut modifier la whitelist.")
         return
-    if utilisateur.id in whitelist_full:
-        await send_embed(ctx, f"⚠️ {utilisateur.mention} a déjà un accès total, inutile de limiter.")
+    gid = ctx.guild.id
+    g_whitelist_full = gset(whitelist_full, gid)
+    g_whitelist_cmd = gdict(whitelist_cmd, gid)
+
+    if utilisateur.id in g_whitelist_full:
+        await send_embed(ctx, f"⚠️ {utilisateur.mention} a déjà un accès total sur ce serveur, inutile de limiter.")
         return
     cmds = commandes.split()
     if not cmds:
@@ -1215,20 +1371,20 @@ async def wlcmd(ctx, utilisateur: discord.Member, *, commandes: str):
         await send_embed(ctx, f"❌ Aucune commande valide fournie. Introuvable(s) : {liste_invalides}")
         return
 
-    if utilisateur.id not in whitelist_cmd:
-        whitelist_cmd[utilisateur.id] = set()
+    if utilisateur.id not in g_whitelist_cmd:
+        g_whitelist_cmd[utilisateur.id] = set()
 
     # Ajoute chaque commande valide + son inverse automatiquement (sauf exceptions)
     auto_ajoutees = set()
     for c in valides:
-        whitelist_cmd[utilisateur.id].add(c)
+        g_whitelist_cmd[utilisateur.id].add(c)
         opposite = OPPOSITE_COMMANDS.get(c)
-        if opposite and opposite not in whitelist_cmd[utilisateur.id]:
-            whitelist_cmd[utilisateur.id].add(opposite)
+        if opposite and opposite not in g_whitelist_cmd[utilisateur.id]:
+            g_whitelist_cmd[utilisateur.id].add(opposite)
             auto_ajoutees.add(opposite)
 
-    liste = ", ".join(f"`/{c}`" for c in whitelist_cmd[utilisateur.id])
-    description = f"✅ {utilisateur.mention} peut maintenant utiliser : {liste}"
+    liste = ", ".join(f"`/{c}`" for c in g_whitelist_cmd[utilisateur.id])
+    description = f"✅ {utilisateur.mention} peut maintenant utiliser sur ce serveur : {liste}"
     if auto_ajoutees:
         liste_auto = ", ".join(f"`/{c}`" for c in auto_ajoutees)
         description += f"\n➕ Commande(s) inverse(s) ajoutée(s) automatiquement : {liste_auto}"
@@ -1240,11 +1396,14 @@ async def wlcmd(ctx, utilisateur: discord.Member, *, commandes: str):
     await send_embed(ctx, description)
 
 
-@bot.hybrid_command(name="unwlcmd", description="Retirer l'accès à des commandes précises (owner seulement)")
+@bot.hybrid_command(name="unwlcmd", description="Retirer l'accès à des commandes précises sur ce serveur (owner seulement)")
 async def unwlcmd(ctx, utilisateur: discord.Member, *, commandes: str):
     if ctx.author.id not in OWNER_IDS:
         await send_embed(ctx, "❌ Seul le propriétaire peut modifier la whitelist.")
         return
+    gid = ctx.guild.id
+    g_whitelist_cmd = gdict(whitelist_cmd, gid)
+
     cmds = commandes.split()
     if not cmds:
         await send_embed(ctx, "⚠️ Précise au moins une commande. Ex: `/unwlcmd utilisateur:@user commandes:ban mute`")
@@ -1256,33 +1415,36 @@ async def unwlcmd(ctx, utilisateur: discord.Member, *, commandes: str):
         await send_embed(ctx, f"❌ Commande(s) introuvable(s) : {liste_invalides}")
         return
 
-    if utilisateur.id not in whitelist_cmd:
-        await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a aucune permission limitée.")
+    if utilisateur.id not in g_whitelist_cmd:
+        await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a aucune permission limitée sur ce serveur.")
         return
     for c in cmds:
-        whitelist_cmd[utilisateur.id].discard(c)
-    if not whitelist_cmd[utilisateur.id]:
-        del whitelist_cmd[utilisateur.id]
+        g_whitelist_cmd[utilisateur.id].discard(c)
+    if not g_whitelist_cmd[utilisateur.id]:
+        del g_whitelist_cmd[utilisateur.id]
         save_state()
-        await send_embed(ctx, f"✅ Toutes les permissions limitées de {utilisateur.mention} ont été retirées.")
+        await send_embed(ctx, f"✅ Toutes les permissions limitées de {utilisateur.mention} sur ce serveur ont été retirées.")
     else:
         save_state()
-        liste = ", ".join(f"`/{c}`" for c in whitelist_cmd[utilisateur.id])
+        liste = ", ".join(f"`/{c}`" for c in g_whitelist_cmd[utilisateur.id])
         await send_embed(ctx, f"✅ Permissions mises à jour. {utilisateur.mention} peut encore : {liste}")
 
 
-@bot.hybrid_command(name="perms", description="Voir les permissions d'un utilisateur (owner seulement)")
+@bot.hybrid_command(name="perms", description="Voir les permissions d'un utilisateur sur ce serveur (owner seulement)")
 async def perms(ctx, utilisateur: discord.Member):
     if ctx.author.id not in OWNER_IDS:
         await send_embed(ctx, "❌ Seul le propriétaire peut voir les permissions.")
         return
-    if utilisateur.id in whitelist_full:
-        await send_embed(ctx, f"🔓 {utilisateur.mention} a un accès **total** à toutes les commandes.")
-    elif utilisateur.id in whitelist_cmd:
-        liste = ", ".join(f"`/{c}`" for c in whitelist_cmd[utilisateur.id])
+    gid = ctx.guild.id
+    g_whitelist_full = gset(whitelist_full, gid)
+    g_whitelist_cmd = gdict(whitelist_cmd, gid)
+    if utilisateur.id in g_whitelist_full:
+        await send_embed(ctx, f"🔓 {utilisateur.mention} a un accès **total** à toutes les commandes sur ce serveur.")
+    elif utilisateur.id in g_whitelist_cmd:
+        liste = ", ".join(f"`/{c}`" for c in g_whitelist_cmd[utilisateur.id])
         await send_embed(ctx, f"🔑 {utilisateur.mention} a accès uniquement à : {liste}")
     else:
-        await send_embed(ctx, f"⛔ {utilisateur.mention} n'a aucune permission.")
+        await send_embed(ctx, f"⛔ {utilisateur.mention} n'a aucune permission sur ce serveur.")
 
 
 # ─── HELP ─────────────────────────────────────────────────────────────────────
@@ -1344,25 +1506,27 @@ async def help_cmd(ctx):
 
     embed.add_field(name="💬 Divers", value="""
 `/say message` — Le bot répète exactement le message
-`/off` — Désactive le bot entièrement
-`/on` — Réactive le bot (owner uniquement)
-`/reset` — Réinitialise tous les états du bot (owner uniquement)
+`/off` — Désactive le bot entièrement sur ce serveur
+`/on` — Réactive le bot sur ce serveur (owner uniquement)
+`/reset` — Réinitialise tous les états du bot sur ce serveur (owner uniquement)
 """, inline=False)
 
     embed.add_field(name="⛔ Blacklist", value="""
 `/bl utilisateur raison` — Blacklister et bannir définitivement
 `/unbl cible` — Retirer de la blacklist et débannir (ID ou mention)
+`/wet utilisateur raison` — Blacklister et bannir définitivement (identique à /bl)
+`/unwet cible` — Retirer de la blacklist et débannir (identique à /unbl)
 `/bl-list` — Voir la liste des blacklistés
 `/ban-list` — Voir la liste des membres bannis du serveur
 """, inline=False)
 
     embed.add_field(name="⚙️ Whitelist / Owner", value="""
-`/wl utilisateur` — Accès total à toutes les commandes
-`/unwl utilisateur` — Retirer toutes les permissions
-`/wlcmd utilisateur commandes` — Accès limité à des commandes précises
-`/unwlcmd utilisateur commandes` — Retirer l'accès à des commandes précises
-`/perms utilisateur` — Voir les permissions d'un utilisateur
-`/wl-list` — Voir la whitelist complète
+`/wl utilisateur` — Accès total à toutes les commandes sur ce serveur
+`/unwl utilisateur` — Retirer toutes les permissions sur ce serveur
+`/wlcmd utilisateur commandes` — Accès limité à des commandes précises sur ce serveur
+`/unwlcmd utilisateur commandes` — Retirer l'accès à des commandes précises sur ce serveur
+`/perms utilisateur` — Voir les permissions d'un utilisateur sur ce serveur
+`/wl-list` — Voir la whitelist de ce serveur
 `/doglimit utilisateur limite` — Définir le nombre max de laisses simultanées
 `/unwldoglimit utilisateur` — Retirer la limite de dog d'un membre
 """, inline=False)
