@@ -36,6 +36,7 @@ VALID_COMMANDS = {
     "mutespam", "unmutespam", "spam", "stopspam",
     "bl", "unbl", "wet", "unwet", "derank", "hack", "off", "say", "help",
     "pp", "banner", "dog-list", "bl-list", "name-list", "ban-list", "lock-list",
+    "clear", "renew",
 }
 
 # Paires de commandes opposées : ajouter l'une ajoute automatiquement l'autre
@@ -1411,6 +1412,7 @@ async def unwlcmd(ctx, utilisateur: discord.Member, *, commandes: str):
         await send_embed(ctx, "❌ Seul le propriétaire peut modifier la whitelist.")
         return
     gid = ctx.guild.id
+    g_whitelist_full = gset(whitelist_full, gid)
     g_whitelist_cmd = gdict(whitelist_cmd, gid)
 
     cmds = commandes.split()
@@ -1424,8 +1426,24 @@ async def unwlcmd(ctx, utilisateur: discord.Member, *, commandes: str):
         await send_embed(ctx, f"❌ Commande(s) introuvable(s) : {liste_invalides}")
         return
 
+    # Si l'utilisateur a un accès total (donné via /wl), on le convertit en
+    # accès limité = toutes les commandes valides SAUF celles retirées ici.
+    if utilisateur.id in g_whitelist_full:
+        g_whitelist_full.discard(utilisateur.id)
+        restantes = VALID_COMMANDS - set(cmds)
+        if restantes:
+            g_whitelist_cmd[utilisateur.id] = restantes
+            save_state()
+            liste = ", ".join(f"`/{c}`" for c in restantes)
+            await send_embed(ctx, f"✅ {utilisateur.mention} n'a plus l'accès total sur ce serveur. Il garde l'accès à : {liste}")
+        else:
+            g_whitelist_cmd.pop(utilisateur.id, None)
+            save_state()
+            await send_embed(ctx, f"✅ Toutes les permissions de {utilisateur.mention} sur ce serveur ont été retirées.")
+        return
+
     if utilisateur.id not in g_whitelist_cmd:
-        await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a aucune permission limitée sur ce serveur.")
+        await send_embed(ctx, f"⚠️ {utilisateur.mention} n'a aucune permission sur ce serveur.")
         return
     for c in cmds:
         g_whitelist_cmd[utilisateur.id].discard(c)
@@ -1454,6 +1472,134 @@ async def perms(ctx, utilisateur: discord.Member):
         await send_embed(ctx, f"🔑 {utilisateur.mention} a accès uniquement à : {liste}")
     else:
         await send_embed(ctx, f"⛔ {utilisateur.mention} n'a aucune permission sur ce serveur.")
+
+
+# ─── CLEAR ────────────────────────────────────────────────────────────────────
+async def _collect_and_delete(channel, nombre: int, author: discord.Member = None, scan_cap: int = 2000):
+    """Parcourt l'historique du salon (avant maintenant) et supprime jusqu'à
+    `nombre` messages, filtrés par `author` si précisé. Retourne le nombre
+    de messages effectivement supprimés."""
+    to_delete = []
+    async for msg in channel.history(limit=scan_cap, before=discord.utils.utcnow()):
+        if author is None or msg.author.id == author.id:
+            to_delete.append(msg)
+            if len(to_delete) >= nombre:
+                break
+
+    if not to_delete:
+        return 0
+
+    total = 0
+    for i in range(0, len(to_delete), 100):
+        chunk = to_delete[i:i + 100]
+        try:
+            await channel.delete_messages(chunk)
+            total += len(chunk)
+        except discord.HTTPException:
+            # Fallback : suppression une par une (ex: messages de +14 jours)
+            for m in chunk:
+                try:
+                    await m.delete()
+                    total += 1
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+    return total
+
+
+@bot.hybrid_command(name="clear", description="Supprimer des messages du salon (ceux d'un membre précis, ou globalement)")
+@is_allowed("clear")
+async def clear(ctx, cible: discord.Member = None, nombre: int = 10):
+    if nombre <= 0:
+        await send_embed(ctx, "⚠️ Le nombre de messages doit être supérieur à 0.")
+        return
+    if nombre > 500:
+        nombre = 500
+
+    is_interaction = ctx.interaction is not None
+    if is_interaction:
+        await ctx.interaction.response.defer(ephemeral=True)
+    else:
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    try:
+        deleted = await _collect_and_delete(ctx.channel, nombre, author=cible)
+    except discord.Forbidden:
+        msg = "❌ Je n'ai pas la permission de supprimer des messages dans ce salon."
+        if is_interaction:
+            await ctx.followup.send(msg, ephemeral=True)
+        else:
+            await send_embed(ctx, msg)
+        return
+    except discord.HTTPException:
+        msg = "❌ Erreur lors de la suppression des messages."
+        if is_interaction:
+            await ctx.followup.send(msg, ephemeral=True)
+        else:
+            await send_embed(ctx, msg)
+        return
+
+    if cible:
+        description = f"🧹 {deleted} message(s) de {cible.mention} supprimé(s)."
+    else:
+        description = f"🧹 {deleted} message(s) supprimé(s)."
+
+    if is_interaction:
+        await ctx.followup.send(embed=discord.Embed(description=description, color=EMBED_COLOR), ephemeral=True)
+    else:
+        confirmation = await ctx.channel.send(embed=discord.Embed(description=description, color=EMBED_COLOR))
+        await asyncio.sleep(3)
+        try:
+            await confirmation.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
+# ─── RENEW ────────────────────────────────────────────────────────────────────
+@bot.hybrid_command(name="renew", description="Recréer le salon actuel à l'identique (même nom, mêmes perms, même position)")
+@is_allowed("renew")
+async def renew(ctx):
+    channel = ctx.channel
+    if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+        await send_embed(ctx, "⚠️ Cette commande ne fonctionne que dans un salon textuel ou vocal.")
+        return
+
+    author_mention = ctx.author.mention
+    position = channel.position
+    is_interaction = ctx.interaction is not None
+
+    if is_interaction:
+        try:
+            await ctx.interaction.response.send_message("🔄 Recréation du salon en cours...", ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+    try:
+        new_channel = await channel.clone(reason=f"Renew demandé par {ctx.author}")
+        try:
+            await new_channel.edit(position=position)
+        except discord.HTTPException:
+            pass
+        await channel.delete(reason=f"Renew demandé par {ctx.author}")
+    except discord.Forbidden:
+        try:
+            await channel.send(embed=discord.Embed(description="❌ Je n'ai pas la permission de recréer ce salon.", color=EMBED_COLOR))
+        except discord.HTTPException:
+            pass
+        return
+    except discord.HTTPException:
+        try:
+            await channel.send(embed=discord.Embed(description="❌ Erreur lors de la recréation du salon.", color=EMBED_COLOR))
+        except discord.HTTPException:
+            pass
+        return
+
+    try:
+        await new_channel.send(embed=discord.Embed(description=f"🔄 Salon recréé par {author_mention}.", color=EMBED_COLOR))
+    except discord.HTTPException:
+        pass
 
 
 # ─── HELP ─────────────────────────────────────────────────────────────────────
@@ -1513,6 +1659,11 @@ async def help_cmd(ctx):
 `/derank utilisateur` — Retirer tous les rôles d'un membre
 """, inline=False)
 
+    embed.add_field(name="🧹 Salon", value="""
+`/clear [cible] [nombre]` — Supprime les messages (d'un membre précis si mentionné, sinon les N derniers), aussi en `!clear`
+`/renew` — Recrée le salon actuel à l'identique (même perms), aussi en `!renew`
+""", inline=False)
+
     embed.add_field(name="💬 Divers", value="""
 `/say message` — Le bot répète exactement le message
 `/off` — Désactive le bot entièrement sur ce serveur
@@ -1533,7 +1684,7 @@ async def help_cmd(ctx):
 `/wl utilisateur` — Accès total à toutes les commandes sur ce serveur
 `/unwl utilisateur` — Retirer toutes les permissions sur ce serveur
 `/wlcmd utilisateur commandes` — Accès limité à des commandes précises sur ce serveur
-`/unwlcmd utilisateur commandes` — Retirer l'accès à des commandes précises sur ce serveur
+`/unwlcmd utilisateur commandes` — Retirer l'accès à des commandes précises (fonctionne aussi sur un accès total donné par /wl)
 `/perms utilisateur` — Voir les permissions d'un utilisateur sur ce serveur
 `/wl-list` — Voir la whitelist de ce serveur
 `/doglimit utilisateur limite` — Définir le nombre max de laisses simultanées
