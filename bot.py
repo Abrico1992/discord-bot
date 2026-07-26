@@ -58,9 +58,6 @@ OPPOSITE_COMMANDS = {
 # Utilisateur protégé : ne peut être ciblé par aucune commande du bot
 PROTECTED_ID = 1524948006632165437
 
-# Salon dans lequel /help doit obligatoirement être utilisé
-HELP_CHANNEL_ID = 1524249709210767471
-
 # Détecte un suffixe "(🦮 de X)" dans un pseudo, peu importe s'il a été posé via /dog ou non
 DOG_SUFFIX_PATTERN = re.compile(r"\s*\(🦮 de [^)]*\)\s*$")
 
@@ -1606,10 +1603,6 @@ async def renew(ctx):
 @bot.hybrid_command(name="help", description="Affiche la liste des commandes")
 @is_allowed("help")
 async def help_cmd(ctx):
-    if ctx.channel.id != HELP_CHANNEL_ID:
-        await send_embed(ctx, f"⚠️ Cette commande n'est utilisable que dans <#{HELP_CHANNEL_ID}>.")
-        return
-
     embed = discord.Embed(title="📋 Commandes du bot", color=EMBED_COLOR)
 
     embed.add_field(name="🔨 Modération", value="""
@@ -1691,7 +1684,20 @@ async def help_cmd(ctx):
 `/unwldoglimit utilisateur` — Retirer la limite de dog d'un membre
 """, inline=False)
 
-    await ctx.send(embed=embed)
+    # La commande peut désormais être utilisée dans n'importe quel salon.
+    # Le résultat n'est visible que par la personne qui a exécuté la commande :
+    # - en slash (/help) : réponse "ephemeral" native de Discord
+    # - en préfixe (!help) : envoyé en message privé, car Discord ne permet
+    #   pas de message "éphémère" pour les commandes préfixées classiques
+    if ctx.interaction:
+        await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
+    else:
+        try:
+            await ctx.author.send(embed=embed)
+            if ctx.guild:
+                await send_embed(ctx, "📬 Je t'ai envoyé la liste des commandes en message privé.")
+        except discord.Forbidden:
+            await send_embed(ctx, "❌ Je ne peux pas t'envoyer de MP (vérifie tes paramètres de confidentialité).")
 
 
 # ─── LANCEMENT ────────────────────────────────────────────────────────────────
